@@ -6,11 +6,11 @@
 
 ## Scope
 
-Layer 13: Orchestration. Complete platform integration, CI/CD integration, production hardening.
+Layer 12 (Orchestration & Runtime). Complete platform integration, CI/CD integration, production hardening. Note: layers are numbered 0 through 12; there is no Layer 13. See taxonomy/capabilities.yaml.
 
 ## Deliverables
 
-1. **Full orchestration (Layer 13)**
+1. **Full orchestration (Layer 12)**
    - All 3 tracks running in parallel, findings routing correctly
    - Dependency-aware routing (WRAITH.md §3.1 — 10 conditions)
    - Target-specific tool selection (WRAITH.md §3.2 — 10 target types)
@@ -26,16 +26,16 @@ Layer 13: Orchestration. Complete platform integration, CI/CD integration, produ
    - Documentation: user guide, admin guide, API reference
 4. **Distribution packaging**
    - License compliance (WRAITH.md §11.6 — SQLMap excluded, Burp excluded)
-   - Install script: `curl -fsSL https://wraith.dev/install.sh | sh`
-   - Docker image (optional, for CI/CD)
+   - Signed release artifacts with published checksums and provenance (no curl-to-shell install path)
+   - Docker image (optional, for CI/CD), pinned by digest
 
 ## Acceptance criteria
 
 - [ ] `wraith scan --all` runs all 3 tracks in parallel, produces merged SARIF
 - [ ] CI/CD pipeline passes on a reference target
-- [ ] Install script works on a clean Ubuntu/macOS machine
+- [ ] Signed release artifact verifies (checksum + provenance) and installs on a clean Ubuntu/macOS machine
 - [ ] All 6 known gaps (WRAITH.md §11) resolved or have concrete issue tickets
-- [ ] Documentation covers all 13 layers, 3 tracks, 8 phases
+- [ ] Documentation covers all 13 layers (0-12), 3 tracks, 8 milestones (0-7)
 
 ## Notes
 

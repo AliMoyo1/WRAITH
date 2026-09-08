@@ -458,7 +458,7 @@ WRAITH is NOT a linear pipeline. Analysis follows **three parallel tracks**, eac
 - OSV.dev integration (optional, offline-capable)
 
 **Integration:**
-- **[SkillSpector](https://github.com/NVIDIA/SkillSpector)** — Primary SAST engine. 18 pattern categories spanning static analysis, MCP tool poisoning, supply chain, behavioral AST, and YARA matching. Two-stage analysis (static + optional LLM).
+- **[SkillSpector](https://github.com/NVIDIA/SkillSpector)** — Primary SAST engine. 71 patterns across 17 categories spanning static analysis, MCP tool poisoning, supply chain, behavioral AST, and YARA matching (see the SkillSpector README pattern catalog). Two-stage analysis (static + optional LLM).
 - **ScanAgenticRisk** — Self-developed rule contract framework, capability registry, NOT_EVALUATED discipline.
 - **[Strix](https://github.com/usestrix/strix)** `source_aware_sast` — Semgrep/AST/secrets/supply-chain static triage workflow.
 
@@ -479,7 +479,7 @@ WRAITH is NOT a linear pipeline. Analysis follows **three parallel tracks**, eac
 **Purpose:** The distinguishing capability of WRAITH. Detect threats unique to AI agent ecosystems — prompt injection, MCP tool poisoning, agent hijacking, delegation abuse, excessive agency.
 
 #### 7.1 MCP Security Analysis
-- **Tool poisoning** (SkillSpector TP1-TP4):
+- **Tool poisoning** (SkillSpector `mcp_tool_poisoning` analyzer; the TP1-TP4 grouping below is WRAITH's own conceptual breakdown, not SkillSpector pattern ids):
   - TP1: Hidden instructions in metadata (HTML comments, zero-width chars, base64 blobs)
   - TP2: Unicode deception (homoglyphs, RTL overrides)
   - TP3: Parameter description injection
@@ -667,7 +667,7 @@ WRAITH is NOT a linear pipeline. Analysis follows **three parallel tracks**, eac
 
 #### 11.1 Findings Aggregation
 - Unified finding format across all layers
-- Severity scoring (CVSS 3.1 base + WRAITH modifiers)
+- Severity scoring (CVSS 4.0 base + WRAITH modifiers; CVSS 3.1 accepted for import compatibility)
 - Confidence scoring
 - Evidence capture (screenshots, request/response pairs, code snippets)
 
@@ -772,7 +772,7 @@ Based on the Agent Runtime prototype (at `./agent-runtime/` relative to the WRAI
 
 | Repo | Lines (core) | Language | License | Role in WRAITH |
 |------|-------------|----------|---------|----------------|
-| **[SkillSpector](https://github.com/NVIDIA/SkillSpector)** | ~56K (src + contrib) | Python | Apache 2.0 | **Core SAST engine.** 18 pattern categories, MCP tool poisoning (TP1-TP4), behavioral AST, YARA. |
+| **[SkillSpector](https://github.com/NVIDIA/SkillSpector)** | ~56K (src + contrib) | Python | Apache 2.0 | **Core SAST engine.** 71 patterns across 17 categories, MCP tool poisoning, behavioral AST, YARA. |
 | **[Strix](https://github.com/usestrix/strix)** | ~69K | Python | Apache 2.0 | **Autonomous pentesting.** Multi-agent orchestration, web/API/network scanning, active exploitation. |
 | **[CubeSandbox](https://github.com/TencentCloud/CubeSandbox)** | ~39K (Python core; 226K Rust + 122K Go incl. vendored KVM/RustVMM) | Rust+Python+Go | Apache 2.0 | **Hardware-isolated sandbox.** KVM/RustVMM, <60ms startup, E2B-compatible. |
 | **[Ponytail](https://github.com/DietrichGebert/ponytail)** | ~2K | JavaScript | MIT | **Code review/minimization.** Reduces code ~54%, cost ~20%. |
@@ -901,43 +901,45 @@ All 50+ security skills from the Hermes skills library are integrated into WRAIT
 
 ## 6. Detection Domain Coverage
 
-| Domain | WRAITH Coverage | Tool | Skill |
-|--------|----------------|------|-------|
-| **SQL Injection** | ✓ | Strix + SQLMap | `sql-injection-testing`, `sqlmap` |
-| **Cross-Site Scripting (XSS)** | ✓ | Strix + Burp | `cross-site-scripting` |
-| **Cross-Site Request Forgery** | ✓ | Strix | `web-vuln-playbooks` |
-| **Server-Side Request Forgery** | ✓ | Strix | `web-vuln-playbooks` |
-| **IDOR / BOLA** | ✓ | Strix | `idor-vulnerability-testing` |
-| **Broken Authentication** | ✓ | Strix + Burp | `broken-authentication-testing` |
-| **File Upload Vulnerabilities** | ✓ | SkillSpector + Strix | `file-uploads` |
-| **Path Traversal** | ✓ | SkillSpector + Strix | `file-path-traversal-testing` |
-| **Insecure Deserialization** | ✓ | SkillSpector AST | `metasploit-framework` |
-| **XXE** | ✓ | Strix | `web-vuln-playbooks` |
-| **Security Misconfiguration** | ✓ | Strix + SkillSpector | `vulnerability-scanner` |
-| **JWT / OAuth Weaknesses** | ✓ | Strix | `jwt-oauth-graphql-testing` |
-| **GraphQL Introspection/Batching** | ✓ | Strix | `api-security-testing` |
-| **API Fuzzing** | ✓ | Strix | `api-fuzzing-for-bug-bounty` |
-| **Port Scanning / Enumeration** | ✓ | Nmap + Strix | `pentest-commands` |
-| **SSH Security** | ✓ | Nmap + Strix | `ssh-penetration-testing` |
-| **SMTP Security** | ✓ | Nmap + Strix | `smtp-penetration-testing` |
-| **Active Directory** | ✓ | Strix | `active-directory-attacks` |
-| **DNS Zone Transfer** | ✓ | Nmap + Strix | `pentest-commands` |
-| **AWS IAM / S3 / EC2** | ✓ | Strix | `aws-penetration-testing` |
-| **Azure AD / RBAC** | ✓ | Strix | `cloud-penetration-testing` |
-| **GCP IAM / GKE** | ✓ | Strix | `google-cloud-waf-security` |
-| **Kubernetes RBAC** | ✓ | Strix | `cloud-penetration-testing` |
-| **Indirect Prompt Injection** | ✓ | ScanAgenticRisk + Strix | `llm-security-testing` |
-| **MCP Tool Poisoning** | ✓ | SkillSpector TP1-TP4 | — |
-| **Tool Shadowing** | ✓ | SkillSpector + ScanAgenticRisk | — |
-| **Excessive Agency** | ✓ | SkillSpector EA1-EA5 | `privilege-escalation-methods` |
-| **Memory Poisoning** | ✓ | SkillSpector MP1-MP3 | — |
-| **RAG / Vector-Store Risks** | ✓ | ScanAgenticRisk | — |
-| **Multi-Agent / A2A** | ✓ | ScanAgenticRisk + Strix | — |
-| **Supply Chain / Slopsquatting** | ✓ | SkillSpector + Strix | `supply-chain-guard` |
-| **Linux Privilege Escalation** | ✓ | Strix + Metasploit | `linux-privilege-escalation` |
-| **Windows Privilege Escalation** | ✓ | Strix + Metasploit | `windows-privilege-escalation` |
-| **Lateral Movement** | ✓ | Metasploit + Strix | `red-team-tactics` |
-| **Data Exfiltration** | ✓ | Strix | `red-team-tools-and-methodology` |
+> **Status** uses the coverage taxonomy in [`taxonomy/capabilities.yaml`](taxonomy/capabilities.yaml). As of milestone 0 no domain is `INTEGRATED` or `VERIFIED`: a domain an upstream engine already covers is `AVAILABLE_UPSTREAM`, and a domain whose adapter is not yet built is `UNAVAILABLE`. A checkmark is not evidence of integration.
+
+| Domain | Status | Tool | Skill |
+|--------|--------|------|-------|
+| **SQL Injection** | AVAILABLE_UPSTREAM | Strix + SQLMap | `sql-injection-testing`, `sqlmap` |
+| **Cross-Site Scripting (XSS)** | AVAILABLE_UPSTREAM | Strix + Burp | `cross-site-scripting` |
+| **Cross-Site Request Forgery** | AVAILABLE_UPSTREAM | Strix | `web-vuln-playbooks` |
+| **Server-Side Request Forgery** | AVAILABLE_UPSTREAM | Strix | `web-vuln-playbooks` |
+| **IDOR / BOLA** | AVAILABLE_UPSTREAM | Strix | `idor-vulnerability-testing` |
+| **Broken Authentication** | AVAILABLE_UPSTREAM | Strix + Burp | `broken-authentication-testing` |
+| **File Upload Vulnerabilities** | AVAILABLE_UPSTREAM | SkillSpector + Strix | `file-uploads` |
+| **Path Traversal** | AVAILABLE_UPSTREAM | SkillSpector + Strix | `file-path-traversal-testing` |
+| **Insecure Deserialization** | AVAILABLE_UPSTREAM | SkillSpector | `metasploit-framework` |
+| **XXE** | AVAILABLE_UPSTREAM | Strix | `web-vuln-playbooks` |
+| **Security Misconfiguration** | AVAILABLE_UPSTREAM | Strix + SkillSpector | `vulnerability-scanner` |
+| **JWT / OAuth Weaknesses** | AVAILABLE_UPSTREAM | Strix | `jwt-oauth-graphql-testing` |
+| **GraphQL Introspection/Batching** | AVAILABLE_UPSTREAM | Strix | `api-security-testing` |
+| **API Fuzzing** | AVAILABLE_UPSTREAM | Strix | `api-fuzzing-for-bug-bounty` |
+| **Port Scanning / Enumeration** | UNAVAILABLE | Nmap (adapter not built) | `pentest-commands` |
+| **SSH Security** | UNAVAILABLE | Nmap (adapter not built) | `ssh-penetration-testing` |
+| **SMTP Security** | UNAVAILABLE | Nmap (adapter not built) | `smtp-penetration-testing` |
+| **Active Directory** | AVAILABLE_UPSTREAM | Strix | `active-directory-attacks` |
+| **DNS Zone Transfer** | UNAVAILABLE | Nmap (adapter not built) | `pentest-commands` |
+| **AWS IAM / S3 / EC2** | AVAILABLE_UPSTREAM | Strix | `aws-penetration-testing` |
+| **Azure AD / RBAC** | AVAILABLE_UPSTREAM | Strix | `cloud-penetration-testing` |
+| **GCP IAM / GKE** | AVAILABLE_UPSTREAM | Strix | `google-cloud-waf-security` |
+| **Kubernetes RBAC** | AVAILABLE_UPSTREAM | Strix | `cloud-penetration-testing` |
+| **Indirect Prompt Injection** | AVAILABLE_UPSTREAM | SkillSpector + Strix | `llm-security-testing` |
+| **MCP Tool Poisoning** | AVAILABLE_UPSTREAM | SkillSpector (mcp_tool_poisoning) | — |
+| **Tool Shadowing** | NOT_EVALUATED | ScanAgenticRisk (spec only) | — |
+| **Excessive Agency** | AVAILABLE_UPSTREAM | SkillSpector (EA1-EA5) | `privilege-escalation-methods` |
+| **Memory Poisoning** | AVAILABLE_UPSTREAM | SkillSpector (memory_poisoning) | — |
+| **RAG / Vector-Store Risks** | NOT_EVALUATED | ScanAgenticRisk (spec only) | — |
+| **Multi-Agent / A2A** | NOT_EVALUATED | ScanAgenticRisk (spec only) | — |
+| **Supply Chain / Slopsquatting** | AVAILABLE_UPSTREAM | SkillSpector (SC1-SC9) + Strix | `supply-chain-guard` |
+| **Linux Privilege Escalation** | AVAILABLE_UPSTREAM | Strix (Metasploit gated) | `linux-privilege-escalation` |
+| **Windows Privilege Escalation** | AVAILABLE_UPSTREAM | Strix (Metasploit gated) | `windows-privilege-escalation` |
+| **Lateral Movement** | AVAILABLE_UPSTREAM | Strix (Metasploit gated) | `red-team-tactics` |
+| **Data Exfiltration** | AVAILABLE_UPSTREAM | Strix | `red-team-tools-and-methodology` |
 
 ---
 
@@ -1056,8 +1058,8 @@ Phase 0 (Foundation) ───────────────────�
 
 ### Phase 3 — SAST/Agentic Track (Track C)
 - **Parallel with:** Phase 1, Phase 2
-- SkillSpector integration (18 pattern categories: static analysis, MCP tool poisoning, supply chain, behavioral AST, YARA)
-- MCP tool poisoning detection (TP1-TP4)
+- SkillSpector integration (71 patterns across 17 categories: static analysis, MCP tool poisoning, supply chain, behavioral AST, YARA)
+- MCP tool poisoning detection (SkillSpector `mcp_tool_poisoning`)
 - Prompt injection detection (P1-P4, P9)
 - Excessive agency analysis (EA1-EA5)
 - Supply chain / slopsquatting detection
@@ -1114,32 +1116,32 @@ Phase 0 (Foundation) ───────────────────�
 
 ### MITRE ATT&CK Mapping (Enterprise)
 
-| MITRE ATT&CK ID | Technique | WRAITH Layer |
-|-----------------|-----------|-------------|
-| TA0001 — Initial Access | Exploit Public-Facing Application | Layer 2 (Web Scanning) |
-| TA0002 — Execution | Command and Scripting Interpreter | Layer 8 (Exploitation) |
-| TA0003 — Persistence | Account Manipulation, Web Shell | Layer 9 (Post-Exploit) |
-| TA0004 — Privilege Escalation | Exploitation for Privilege Escalation | Layer 9 (Post-Exploit) |
-| TA0005 — Defense Evasion | Obfuscated Files or Information | Layer 8 (Exploitation) |
-| TA0006 — Credential Access | OS Credential Dumping, Brute Force | Layer 8-9 (Exploit + Post-Exploit) |
-| TA0007 — Discovery | Network Service Discovery, System Info Discovery | Layer 0 (Recon), Layer 4 (Network) |
-| TA0008 — Lateral Movement | Remote Services, Lateral Tool Transfer | Layer 9 (Post-Exploit) |
-| TA0009 — Collection | Data from Information Repositories | Layer 9 (Post-Exploit) |
-| TA0010 — Exfiltration | Exfiltration Over C2 Channel | Layer 9 (Post-Exploit) |
-| TA0011 — Command & Control | Ingress Tool Transfer | Layer 8 (Exploitation) |
+Tactics are `TAxxxx`; techniques are `Txxxx`. They are separate identifiers and are kept in separate columns.
+
+| Tactic | Technique | WRAITH Layer |
+|--------|-----------|-------------|
+| TA0001 Initial Access | T1190 Exploit Public-Facing Application | Layer 2 (Web Scanning) |
+| TA0002 Execution | T1059 Command and Scripting Interpreter | Layer 8 (Exploitation) |
+| TA0003 Persistence | T1098 Account Manipulation; T1505.003 Web Shell | Layer 9 (Post-Exploit) |
+| TA0004 Privilege Escalation | T1068 Exploitation for Privilege Escalation | Layer 9 (Post-Exploit) |
+| TA0005 Defense Evasion | T1027 Obfuscated Files or Information | Layer 8 (Exploitation) |
+| TA0006 Credential Access | T1003 OS Credential Dumping; T1110 Brute Force | Layer 8-9 (Exploit + Post-Exploit) |
+| TA0007 Discovery | T1046 Network Service Discovery; T1082 System Information Discovery | Layer 0 (Recon), Layer 4 (Network) |
+| TA0008 Lateral Movement | T1021 Remote Services; T1570 Lateral Tool Transfer | Layer 9 (Post-Exploit) |
+| TA0009 Collection | T1213 Data from Information Repositories | Layer 9 (Post-Exploit) |
+| TA0010 Exfiltration | T1041 Exfiltration Over C2 Channel | Layer 9 (Post-Exploit) |
+| TA0011 Command & Control | T1105 Ingress Tool Transfer | Layer 8 (Exploitation) |
 
 ### MITRE ATLAS Mapping (Agentic)
 
-**Note:** Entries marked with * are likely mappings based on analyzer capability but not explicitly stated in the SkillSpector codebase. Only AML.T0080 and AML.T0051 are confirmed in the source.
+**Note:** ATLAS technique ids must be verified against [atlas.mitre.org](https://atlas.mitre.org/) before use. WRAITH does not publish unverified authoritative mappings. Earlier drafts mislabeled ids: for example `AML.T0058` is *Publish Poisoned Models*, not Excessive Agency. The rows below are limited to what is verified; the remaining agentic detections map to ATLAS techniques that are pending source verification. SkillSpector's own pattern ids are authoritative in its README and mirrored in [`taxonomy/capabilities.yaml`](taxonomy/capabilities.yaml).
 
 | MITRE ATLAS ID | Technique | WRAITH Detection | Status |
 |---------------|-----------|-----------------|--------|
-| AML.T0051 | LLM Prompt Injection | Layer 7 (SkillSpector P1-P4, P9; Strix) | Confirmed in source |
-| AML.T0080 | AI Agent Context Poisoning | Layer 7 (SkillSpector TP1-TP4, MP1-MP3) | Confirmed in source |
-| AML.T0020 | Data Poisoning | Layer 7 (SkillSpector SC1-SC4, supply chain) | Likely* |
-| AML.T0058 | Excessive Agency | Layer 7 (SkillSpector EA1-EA5) | Likely* |
-| AML.T0040 | Privilege Escalation | Layer 7 (SkillSpector PE1-PE5) | Likely* |
-| AML.T0043 | Data Exfiltration | Layer 7 (SkillSpector E1-E5) | Likely* |
+| AML.T0051 | LLM Prompt Injection | Layer 7 (SkillSpector prompt-injection P1-P5, P9; Strix) | Confirmed |
+| (verify) | Agent context / memory poisoning | Layer 7 (SkillSpector memory_poisoning) | Pending source verification |
+| (verify) | Data / model poisoning | Layer 7 (SkillSpector supply_chain SC1-SC9) | Pending source verification |
+| (verify) | Data exfiltration | Layer 7 (SkillSpector data_exfiltration E1-E4) | Pending source verification |
 
 ### OWASP Top 10 for Web Applications 2021
 
@@ -1173,25 +1175,27 @@ Phase 0 (Foundation) ───────────────────�
 
 ### OWASP Top 10 for Agentic Applications 2026
 
-| ID | Vulnerability | WRAITH Coverage |
-|----|--------------|-----------------|
-| AGENTIC-LLM01-2026 | Agent Goal Hijack | Layer 7 (Strix LLM injection) |
-| AGENTIC-LLM02-2026 | Tool Misuse | Layer 7 (SkillSpector TM1-TM4) |
-| AGENTIC-LLM03-2026 | Identity & Privilege Abuse | Layer 7 (EA1-EA5, PE1-PE5) |
-| AGENTIC-LLM04-2026 | Agentic Supply Chain | Layer 7 (SC1-SC4, Strix) |
-| AGENTIC-LLM05-2026 | Unexpected Code Execution | Layer 7 (AST1-AST10) |
-| AGENTIC-LLM06-2026 | Sensitive Info Disclosure | Layer 7 (E1-E5, secret redaction) |
-| AGENTIC-LLM07-2026 | Unsafe Delegation | Layer 7 (ScanAgenticRisk 8.17) |
-| AGENTIC-LLM08-2026 | Memory & Data Poisoning | Layer 7 (MP1-MP3) |
-| AGENTIC-LLM09-2026 | Lateral Movement | Layer 7 (Strix + CubeSandbox) |
-| AGENTIC-LLM10-2026 | Denial of Service | Layer 7 (CubeSandbox resource limits) |
+Official identifiers are `ASI01` through `ASI10` (source: [OWASP Top 10 for Agentic Applications 2026](https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/)).
+
+| ID | Vulnerability | WRAITH Detection |
+|----|--------------|------------------|
+| ASI01 | Agent Goal Hijack | Layer 7 (Strix LLM injection; SkillSpector prompt-injection P1-P5, P9) |
+| ASI02 | Tool Misuse & Exploitation | Layer 7 (SkillSpector tool_misuse TM1-TM3) |
+| ASI03 | Agent Identity & Privilege Abuse | Layer 7 (SkillSpector EA1-EA5, PE1-PE3) |
+| ASI04 | Agentic Supply Chain Compromise | Layer 7 (SkillSpector SC1-SC9; Strix) |
+| ASI05 | Unexpected Code Execution | Layer 7 (SkillSpector behavioral AST) |
+| ASI06 | Memory and Context Poisoning | Layer 7 (SkillSpector memory_poisoning) |
+| ASI07 | Insecure Inter-Agent Communication | Layer 7 (ScanAgenticRisk A2A, NOT_EVALUATED) |
+| ASI08 | Cascading Failures | Layer 7/9 (CubeSandbox dynamic eval, NOT_EVALUATED) |
+| ASI09 | Human-Agent Trust Exploitation | Layer 7 (SkillSpector anti-refusal AR1-AR3; HITL analysis) |
+| ASI10 | Rogue Agents | Layer 7 (SkillSpector rogue_agent) |
 
 ---
 
 ## 10. References & Repositories
 
 ### Primary Repos
-- **[NVIDIA/SkillSpector](https://github.com/NVIDIA/SkillSpector)** — Agent skill security scanner. 18 pattern categories incl. MCP tool poisoning, behavioral AST, YARA, supply chain. The core SAST engine.
+- **[NVIDIA/SkillSpector](https://github.com/NVIDIA/SkillSpector)** — Agent skill security scanner. 71 patterns across 17 categories incl. MCP tool poisoning, behavioral AST, YARA, supply chain. The core SAST engine.
 - **[usestrix/strix](https://github.com/usestrix/strix)** — Autonomous AI pentesting agent. Multi-agent orchestration with web/API/network scanning.
 - **[TencentCloud/CubeSandbox](https://github.com/TencentCloud/CubeSandbox)** — KVM/RustVMM sandbox. <60ms startup, hardware isolation, E2B-compatible.
 - **[DietrichGebert/ponytail](https://github.com/DietrichGebert/ponytail)** — Lazy senior dev AI agent plugin. ~54% less code, 100% safe.

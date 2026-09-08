@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/AliMoyo1/WRAITH/schemas/finding.schema.json",
+  "title": "WRAITH Finding",
+  "description": "Normalized finding emitted by any WRAITH engine adapter. The versioned contract consumed by reporting, SARIF export, and ThemisIQ.",
+  "type": "object",
+  "required": ["finding_id", "fingerprint", "rule_id", "layer", "severity", "confidence", "evaluation_result"],
+  "additionalProperties": false,
+  "properties": {
+    "finding_id": {"type": "string"},
+    "fingerprint": {"type": "string", "description": "Stable hash for cross-scan correlation."},
+    "rule_id": {"type": "string"},
+    "rule_version": {"type": "string"},
+    "engine": {"type": "string", "description": "Producing engine, for example skillspector or strix."},
+    "layer": {"type": "integer", "minimum": 0, "maximum": 12, "description": "Architectural layer 0-12 (see taxonomy/capabilities.yaml). There is no layer 13."},
+    "title": {"type": "string"},
+    "description": {"type": "string"},
+
+    "rule_lifecycle": {"enum": ["ACTIVE", "DEPRECATED", "DISABLED"]},
+    "implementation_capability": {"enum": ["IMPLEMENTED", "PARTIAL", "SPECIFICATION_ONLY", "UNSUPPORTED"]},
+    "evaluation_result": {"enum": ["FINDING", "NO_FINDING", "REVIEW_REQUIRED", "NOT_EVALUATED", "ERROR"]},
+
+    "severity": {"enum": ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFORMATIONAL"]},
+    "confidence": {"enum": ["HIGH", "MEDIUM", "LOW"]},
+    "cvss": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": {"enum": ["4.0", "3.1"], "description": "4.0 is primary; 3.1 accepted for import compatibility."},
+        "base_score": {"type": "number", "minimum": 0, "maximum": 10},
+        "vector": {"type": "string"}
+      }
+    },
+
+    "location": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "target": {"type": "string"},
+        "file": {"type": "string"},
+        "start_line": {"type": "integer"},
+        "end_line": {"type": "integer"},
+        "url": {"type": "string"}
+      }
+    },
+    "source": {"type": "object"},
+    "sink": {"type": "object"},
+    "data_flow": {"type": "array", "items": {"type": "string"}},
+
+    "policy_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "state": {"enum": ["VERIFIED", "CANDIDATE", "ABSENT", "UNKNOWN", "FAILED"]},
+        "reason": {"type": "string"}
+      }
+    },
+
+    "taxonomy_mappings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["framework", "control_id"],
+        "additionalProperties": false,
+        "properties": {
+          "framework": {"type": "string", "description": "For example owasp_agentic_2026, mitre_attack, mitre_atlas, cwe."},
+          "control_id": {"type": "string", "description": "For example ASI02, T1190, AML.T0058, CWE-78."},
+          "name": {"type": "string"},
+          "mapping_type": {"enum": ["AUTHORITATIVE_RULE_MAPPING", "CONTEXTUAL"]}
+        }
+      }
+    },
+
+    "evidence": {
+      "type": "object",
+      "properties": {
+        "snippet": {"type": "string"},
+        "redactions_applied": {"type": "boolean"}
+      }
+    },
+    "remediation": {"type": "object"},
+    "coverage_status": {"enum": ["AVAILABLE_UPSTREAM", "INTEGRATED", "VERIFIED", "PARTIAL", "NOT_EVALUATED", "UNAVAILABLE"]}
+  }
+}
