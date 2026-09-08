@@ -23,12 +23,22 @@ from pathlib import Path
 
 from .base import AdapterRequest, EngineAdapter, SubprocessResult, run_subprocess, scrubbed_env
 
-# SkillSpector categories that belong to the agentic layer (7); everything else is SAST (6).
+# SkillSpector's PatternCategory is a StrEnum whose JSON values are title case
+# with spaces (for example "Prompt Injection", "Anti-Refusal"). Categories in
+# this set map to the agentic layer (7); everything else is SAST (6). Keys are
+# stored in normalized form (see _norm_category) so the value form, the
+# enum-name form, and snake_case all match.
 _AGENTIC_CATEGORIES = {
-    "prompt_injection", "anti_refusal", "excessive_agency", "memory_poisoning",
-    "tool_misuse", "mcp_tool_poisoning", "mcp_least_privilege", "mcp_rug_pull",
-    "rogue_agent", "system_prompt_leakage", "agent_snooping", "output_handling",
+    "prompt injection", "anti refusal", "excessive agency", "memory poisoning",
+    "tool misuse", "mcp tool poisoning", "mcp least privilege", "rogue agent",
+    "system prompt leakage", "agent snooping", "output handling",
 }
+
+
+def _norm_category(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    return value.strip().lower().replace("_", " ").replace("-", " ")
 _SEVERITY_MAP = {
     "CRITICAL": "CRITICAL", "HIGH": "HIGH", "MEDIUM": "MEDIUM",
     "LOW": "LOW", "INFO": "INFORMATIONAL", "INFORMATIONAL": "INFORMATIONAL",
@@ -138,8 +148,7 @@ class SkillSpectorAdapter(EngineAdapter):
         return out
 
     def _map_finding(self, f: dict) -> dict:
-        category = (f.get("category") or "").lower()
-        layer = 7 if category in _AGENTIC_CATEGORIES else 6
+        layer = 7 if _norm_category(f.get("category")) in _AGENTIC_CATEGORIES else 6
         severity = _SEVERITY_MAP.get(str(f.get("severity", "")).upper(), "MEDIUM")
         finding_id = str(f.get("finding_id") or f.get("rule_id") or "skillspector-finding")
         return {
