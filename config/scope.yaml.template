@@ -1,0 +1,14 @@
+# Target scope allowlist — template
+# Copy to scope.yaml and populate for each engagement.
+# Empty scope = no targets allowed (safe default).
+
+scope:
+  enabled: false  # Set true to enforce scope
+  allowlist:
+    cidrs: []
+    domains: []
+    urls: []
+    repo_paths: []
+  blocklist:
+    cidrs: []
+    domains: []
