@@ -1134,14 +1134,15 @@ Tactics are `TAxxxx`; techniques are `Txxxx`. They are separate identifiers and 
 
 ### MITRE ATLAS Mapping (Agentic)
 
-**Note:** ATLAS technique ids must be verified against [atlas.mitre.org](https://atlas.mitre.org/) before use. WRAITH does not publish unverified authoritative mappings. Earlier drafts mislabeled ids: for example `AML.T0058` is *Publish Poisoned Models*, not Excessive Agency. The rows below are limited to what is verified; the remaining agentic detections map to ATLAS techniques that are pending source verification. SkillSpector's own pattern ids are authoritative in its README and mirrored in [`taxonomy/capabilities.yaml`](taxonomy/capabilities.yaml).
+**Note:** the ids below were verified against [atlas.mitre.org](https://atlas.mitre.org/) (checked 2026-09-08). WRAITH does not publish unverified authoritative mappings. `AML.T0058` is *Publish Poisoned Model* (an earlier draft wrongly labeled it Excessive Agency). Agent memory / context poisoning has no confirmed dedicated ATLAS technique; the closest is RAG Poisoning (added in the ATLAS 2025 release), whose id should be re-confirmed before it is relied upon. SkillSpector's own pattern ids are authoritative in its README and mirrored in [`taxonomy/capabilities.yaml`](taxonomy/capabilities.yaml).
 
 | MITRE ATLAS ID | Technique | WRAITH Detection | Status |
 |---------------|-----------|-----------------|--------|
 | AML.T0051 | LLM Prompt Injection | Layer 7 (SkillSpector prompt-injection P1-P5, P9; Strix) | Confirmed |
-| (verify) | Agent context / memory poisoning | Layer 7 (SkillSpector memory_poisoning) | Pending source verification |
-| (verify) | Data / model poisoning | Layer 7 (SkillSpector supply_chain SC1-SC9) | Pending source verification |
-| (verify) | Data exfiltration | Layer 7 (SkillSpector data_exfiltration E1-E4) | Pending source verification |
+| AML.T0010 | AI Supply Chain Compromise | Layer 6/7 (SkillSpector supply_chain SC1-SC9) | Confirmed |
+| AML.T0057 | LLM Data Leakage | Layer 7 (SkillSpector data_exfiltration E1-E4) | Confirmed |
+| AML.T0058 | Publish Poisoned Model | Layer 6 (SkillSpector artifact_integrity: unsigned or unhashed model) | Confirmed |
+| (no direct id) | Agent memory / context poisoning | Layer 7 (SkillSpector memory_poisoning) | No dedicated ATLAS technique; closest is RAG Poisoning (2025) |
 
 ### OWASP Top 10 for Web Applications 2021
 
