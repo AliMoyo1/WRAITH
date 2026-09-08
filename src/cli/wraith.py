@@ -15,6 +15,7 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 import uuid
 from datetime import timedelta
@@ -27,9 +28,11 @@ if str(_SRC) not in sys.path:
 
 import config  # noqa: E402
 from adapters import ADAPTERS, AdapterRequest  # noqa: E402
-from orchestrator import Engagement, Scope, now_utc  # noqa: E402
+from obs import get_logger, log_event  # noqa: E402
+from orchestrator import Engagement, Orchestrator, Scope, Track, now_utc  # noqa: E402
 from orchestrator.scope import classify_target  # noqa: E402
 from store import ResultStore, ResultStoreError  # noqa: E402
+from supervisor import Job, Supervisor  # noqa: E402
 
 __version__ = "2.1"
 
@@ -52,27 +55,116 @@ def _load_scope_or_empty(path: Path) -> Scope:
     return Scope()
 
 
-def cmd_scan(args) -> int:
-    if _KILL_FLAG.exists():
-        print("kill-switch engaged; run 'wraith kill --reset' to clear")
-        return 3
+# track -> engine domains; "all" selects by target kind (static repo vs dynamic host).
+_TRACK_DOMAINS = {"skillspector": {"sast", "agentic"}, "strix": {"web", "api", "network", "cloud"}}
+
+
+def _adapters_for(track: str, target: str) -> list[str]:
+    kind = classify_target(target)
+    static_ok = kind == "repo_path"
+    dynamic_ok = kind in ("url", "domain", "cidr")
+    selected: list[str] = []
+    for name, domains in _TRACK_DOMAINS.items():
+        if track == "all":
+            if (name == "skillspector" and static_ok) or (name == "strix" and dynamic_ok):
+                selected.append(name)
+        elif track in domains:
+            selected.append(name)
+    return selected
+
+
+def _authorize_scan(args) -> tuple[int | None, Engagement | None]:
+    """Gate the scan. With an engagement, use the kernel; otherwise a scope pre-flight.
+
+    Returns (early_exit_code_or_None, engagement_or_None).
+    """
+    engage_path = Path(getattr(args, "engagement_file", None) or _DEFAULT_ENGAGE)
+    if engage_path.exists():
+        try:
+            key = config.signing_key()
+        except RuntimeError as exc:
+            print(str(exc))
+            return 2, None
+        engagement = config.load_engagement(engage_path)
+        orch = Orchestrator(key)
+        try:
+            orch.start_engagement(engagement)
+            orch.require_authorization(Track.SAST_AGENTIC, args.target)  # analysis gate: engagement + scope
+        except PermissionError as exc:
+            print(f"refused: {exc}")
+            return 2, None
+        return None, engagement
     path = _scope_path(args)
     if not path.exists():
-        print(f"no scope file at {path}; run 'wraith scope add <target>' first")
-        return 2
+        print(f"no scope file at {path}; run 'wraith scope add <target>' or 'wraith engage start' first")
+        return 2, None
     scope = config.load_scope(path)
     if not scope.enabled:
         print("scope is not enabled (fail closed); set scope.enabled: true after review")
-        return 2
+        return 2, None
     if not scope.allows(args.target):
         print(f"refused: {args.target} is not in the authorized scope")
-        return 2
-    print(f"in scope: {args.target} (track={args.track})")
+        return 2, None
+    return None, None
+
+
+def cmd_scan(args) -> int:
+    logger = get_logger("wraith.scan")
+    if _KILL_FLAG.exists():
+        print("kill-switch engaged; run 'wraith kill --reset' to clear")
+        return 3
+    code, engagement = _authorize_scan(args)
+    if code is not None:
+        return code
     if args.dry_run:
-        print("dry-run: no engines invoked")
-    else:
-        print("[skeleton] engine adapters not yet connected (Phase 1+)")
+        print(f"in scope: {args.target} (track={args.track}); dry-run, no engines invoked")
+        return 0
+    names = _adapters_for(args.track, args.target)
+    if not names:
+        print(f"no engine applies to {args.target} for track={args.track}")
+        return 0
+    jobs = []
+    for name in names:
+        adapter, err = _build_adapter(name)
+        if err:
+            print(err)
+            continue
+        jobs.append(Job(adapter=adapter, request=AdapterRequest(target=args.target, timeout_seconds=args.timeout)))
+    results = Supervisor(max_parallel=args.max_parallel, kill_flag_path=_KILL_FLAG, logger=logger).run(jobs)
+    for r in results:
+        print(f"{r.engine}: {r.status} ({len(r.findings)} finding(s), coverage={r.coverage.get('status')})")
+    findings = [f for r in results for f in r.findings]
+    return _persist_scan(args, engagement, findings, logger)
+
+
+def _persist_scan(args, engagement: Engagement | None, findings: list[dict], logger) -> int:
+    if engagement is None:
+        print(f"no engagement active; {len(findings)} finding(s) not persisted (run 'wraith engage start')")
+        if args.report:
+            _write_report(args.report, None, findings)
+            print(f"ephemeral report written to {args.report}")
+        return 0
+    try:
+        result_key = config.result_key()
+    except RuntimeError:
+        print("WRAITH_RESULT_KEY not set; findings not persisted")
+        return 0
+    store = ResultStore(_RESULTS_ROOT, engagement.id, result_key, actor="scan")
+    for finding in findings:
+        store.put_finding(finding)
+    log_event(logger, logging.INFO, "scan.persisted", engagement=engagement.id, stored=len(findings))
+    print(f"stored {len(findings)} finding(s) under engagement {engagement.id}")
+    if args.report:
+        out = store.export(args.report)
+        print(f"report written to {out}")
     return 0
+
+
+def _write_report(path: str, engagement_id: str | None, findings: list[dict]) -> None:
+    import json
+
+    payload = {"engagement_id": engagement_id, "findings": findings}
+    Path(path).write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
 def cmd_scope(args) -> int:
@@ -271,8 +363,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_scan = sub.add_parser("scan", help="scan a target")
     p_scan.add_argument("target")
     p_scan.add_argument("--track", choices=["web", "api", "network", "cloud", "sast", "agentic", "all"], default="all")
-    p_scan.add_argument("--dry-run", action="store_true", help="report only, no engine execution")
+    p_scan.add_argument("--dry-run", action="store_true", help="authorize only, no engine execution")
     p_scan.add_argument("--scope", help="path to scope file (default config/scope.yaml)")
+    p_scan.add_argument("--engagement-file", dest="engagement_file", help="engagement record file")
+    p_scan.add_argument("--report", help="write findings to this JSON path")
+    p_scan.add_argument("--timeout", type=float, default=300.0, help="per-engine timeout in seconds")
+    p_scan.add_argument("--max-parallel", dest="max_parallel", type=int, default=3, help="max concurrent engines")
     p_scan.set_defaults(func=cmd_scan)
 
     p_scope = sub.add_parser("scope", help="manage target scope allowlist")
