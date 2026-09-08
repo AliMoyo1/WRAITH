@@ -1,0 +1,64 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-09-08T00:00:00Z",
+    "component": {
+      "type": "application",
+      "name": "wraith",
+      "version": "2.1.0",
+      "description": "WRAITH orchestrator and authorization kernel",
+      "licenses": [{"license": {"id": "Apache-2.0"}}]
+    },
+    "properties": [
+      {"name": "wraith:note", "value": "Engines are orchestrated as separate processes, not bundled. Regenerate this SBOM when config/engines.lock.yaml or Python dependencies change."}
+    ]
+  },
+  "components": [
+    {
+      "type": "library",
+      "name": "PyYAML",
+      "version": ">=6",
+      "purl": "pkg:pypi/pyyaml",
+      "licenses": [{"license": {"id": "MIT"}}],
+      "scope": "required"
+    },
+    {
+      "type": "application",
+      "name": "SkillSpector",
+      "version": "704bc9544260c2f41222dc0f92982521709496ab",
+      "licenses": [{"license": {"id": "Apache-2.0"}}],
+      "scope": "optional",
+      "externalReferences": [{"type": "vcs", "url": "https://github.com/NVIDIA/SkillSpector"}],
+      "properties": [{"name": "wraith:consumption", "value": "source, not redistributed"}]
+    },
+    {
+      "type": "application",
+      "name": "Strix",
+      "version": "52b19233477a783004467c1522651eec96015e73",
+      "licenses": [{"license": {"id": "Apache-2.0"}}],
+      "scope": "optional",
+      "externalReferences": [{"type": "vcs", "url": "https://github.com/usestrix/strix"}],
+      "properties": [{"name": "wraith:consumption", "value": "source, container"}]
+    },
+    {
+      "type": "application",
+      "name": "CubeSandbox",
+      "version": "d38cb6e5e49294cb03e7f41248aea6d66e916a76",
+      "licenses": [{"license": {"id": "Apache-2.0"}}],
+      "scope": "optional",
+      "externalReferences": [{"type": "vcs", "url": "https://github.com/TencentCloud/CubeSandbox"}],
+      "properties": [{"name": "wraith:consumption", "value": "service, x86_64 Linux + KVM"}]
+    },
+    {
+      "type": "application",
+      "name": "Ponytail",
+      "version": "356918eba965ee1eac64bd3a7f0dd02108350de5",
+      "licenses": [{"license": {"id": "MIT"}}],
+      "scope": "optional",
+      "externalReferences": [{"type": "vcs", "url": "https://github.com/DietrichGebert/ponytail"}],
+      "properties": [{"name": "wraith:consumption", "value": "source, node plugin"}]
+    }
+  ]
+}
