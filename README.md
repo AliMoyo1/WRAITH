@@ -28,10 +28,10 @@ WRAITH is **not a linear pipeline**. It coordinates **3 parallel analysis tracks
 **13 layers:** Recon → Intake → Web Vuln Scan → API Security → Network & AD → Cloud & Infra → SAST → Agentic Security → Exploitation → Post-Exploit → Code Review → Governance → Orchestration
 
 **Primary engines:**
-- **[SkillSpector](https://github.com/NVIDIA/SkillSpector)** (Apache-2.0) — agent skill security scanner, 18 pattern categories (MCP tool poisoning, prompt injection, supply chain, behavioral AST, YARA)
+- **[SkillSpector](https://github.com/NVIDIA/SkillSpector)** (Apache-2.0): agent skill security scanner, 71 patterns across 17 categories (prompt injection, excessive agency, supply chain, MCP tool poisoning, behavioral AST, YARA)
 - **[Strix](https://github.com/usestrix/strix)** — autonomous AI pentesting agent (multi-agent orchestration)
-- **[CubeSandbox](https://github.com/TencentCloud/CubeSandbox)** — hardware-isolated sandbox (KVM/RustVMM, <60ms startup)
-- **[Ponytail](https://github.com/DietrichGebert/ponytail)** — code review / minimization plugin
+- **[CubeSandbox](https://github.com/TencentCloud/CubeSandbox)**: hardware-isolated dynamic evaluation (KVM/RustVMM); multi-service platform, requires x86_64 Linux with KVM
+- **[Ponytail](https://github.com/DietrichGebert/ponytail)**: code-minimization agent policy / plugin, not a security-review engine
 - **ScanAgenticRisk** (self-developed) — rule contract framework, governance model
 
 **External tools:** Metasploit, SQLMap, Burp Suite, Nmap, Shodan

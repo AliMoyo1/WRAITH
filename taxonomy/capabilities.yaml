@@ -1,0 +1,160 @@
+# WRAITH capability taxonomy: the single source of truth.
+#
+# Architectural LAYERS, delivery MILESTONES, analysis TRACKS, and DETECTION
+# DOMAINS are separate concepts and must not be conflated. WRAITH.md prose and
+# the plans/ files are derived from this file; where they disagree, this file
+# wins. Freeze this before writing more engine code.
+#
+# Audit fixes captured here: layer/milestone separation (Critical #2), honest
+# coverage status instead of checkmarks (High #3), authoritative framework IDs
+# (High #3), and accurate engine facts (High #4).
+
+version: "2.1"
+
+# ---------------------------------------------------------------------------
+# Coverage status: replaces the checkmark in the WRAITH.md coverage table.
+# ---------------------------------------------------------------------------
+coverage_status:
+  AVAILABLE_UPSTREAM: "Capability exists in an upstream engine but is not yet wired into WRAITH."
+  INTEGRATED: "Wired into WRAITH through an adapter; not yet independently verified."
+  VERIFIED: "Integrated and confirmed by a passing fixture in the WRAITH corpus."
+  PARTIAL: "Partially implemented or partially verified."
+  NOT_EVALUATED: "A required analysis capability is absent; never reported as a pass."
+  UNAVAILABLE: "Not provided by any current engine."
+
+# ---------------------------------------------------------------------------
+# Architecture: 13 layers, numbered 0 through 12. Layer 12 is the highest.
+# There is no Layer 13.
+# ---------------------------------------------------------------------------
+layers:
+  0: "Target Acquisition & Reconnaissance"
+  1: "Intake & Safety"
+  2: "Web Application Vulnerability Scanning"
+  3: "API & Service Security Testing"
+  4: "Network & Infrastructure Pentesting"
+  5: "Cloud & Infrastructure Assessment"
+  6: "Static Analysis (SAST)"
+  7: "Agentic Security & Trust Analysis"
+  8: "Exploitation Engine"
+  9: "Post-Exploitation & Lateral Movement"
+  10: "Code Review & Remediation"
+  11: "Reporting & Governance"
+  12: "Orchestration & Runtime"
+
+# ---------------------------------------------------------------------------
+# Delivery: 8 milestones, numbered 0 through 7. Distinct from layers.
+# A milestone delivers one or more layers. This is the only phase numbering.
+# ---------------------------------------------------------------------------
+milestones:
+  0: {name: "Foundation", delivers_layers: [0, 1, 12], depends_on: []}
+  1: {name: "Web/API Track", delivers_layers: [2, 3], depends_on: [0]}
+  2: {name: "Network/Cloud Track", delivers_layers: [4, 5], depends_on: [0]}
+  3: {name: "SAST/Agentic Track", delivers_layers: [6, 7, 10], depends_on: [0]}
+  4: {name: "Exploitation Engine", delivers_layers: [8], depends_on: [1, 2]}
+  5: {name: "Post-Exploitation & Lateral Movement", delivers_layers: [9], depends_on: [3, 4]}
+  6: {name: "Governance & Continuous Monitoring", delivers_layers: [11], depends_on: [1, 2, 3]}
+  7: {name: "Full-Spectrum Integration", delivers_layers: [12], depends_on: [0, 1, 2, 3, 4, 5, 6]}
+
+tracks:
+  A: {name: "Web & API Security", layers: [2, 3], milestone: 1}
+  B: {name: "Network & Cloud Security", layers: [4, 5], milestone: 2}
+  C: {name: "SAST & Agentic Security", layers: [6, 7, 10], milestone: 3}
+
+# ---------------------------------------------------------------------------
+# Compliance frameworks. Identifiers are authoritative; confirm against source
+# before adding new ones (WRAITH does not invent authoritative mappings).
+# ---------------------------------------------------------------------------
+frameworks:
+  owasp_web_2021: {name: "OWASP Top 10 for Web Applications", version: 2021, id_scheme: "A01:2021 .. A10:2021"}
+  owasp_api_2023: {name: "OWASP API Security Top 10", version: 2023, id_scheme: "API1:2023 .. API10:2023"}
+  owasp_llm_2026: {name: "OWASP GenAI LLM Top 10", version: 2026}
+  owasp_mcp: {name: "OWASP MCP Top 10"}
+  owasp_acs: {name: "OWASP Agent Control Standard"}
+  owasp_agentic_2026:
+    name: "OWASP Top 10 for Agentic Applications"
+    version: 2026
+    source: "https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/"
+    items:
+      ASI01: "Agent Goal Hijack"
+      ASI02: "Tool Misuse & Exploitation"
+      ASI03: "Agent Identity & Privilege Abuse"
+      ASI04: "Agentic Supply Chain Compromise"
+      ASI05: "Unexpected Code Execution"
+      ASI06: "Memory and Context Poisoning"
+      ASI07: "Insecure Inter-Agent Communication"
+      ASI08: "Cascading Failures"
+      ASI09: "Human-Agent Trust Exploitation"
+      ASI10: "Rogue Agents"
+  mitre_attack:
+    name: "MITRE ATT&CK (Enterprise)"
+    rule: "Tactics are TAxxxx; techniques are Txxxx. Never label a technique with a tactic id."
+    examples:
+      TA0001: {kind: tactic, name: "Initial Access"}
+      T1190: {kind: technique, name: "Exploit Public-Facing Application", tactic: TA0001}
+  mitre_atlas:
+    name: "MITRE ATLAS"
+    source: "https://atlas.mitre.org/"
+    rule: "Verify every AML.Txxxx against the source. AML.T0058 is Publish Poisoned Models, not Excessive Agency."
+  cwe: {name: "CWE"}
+  cvss: {primary: "4.0", import_compatible: ["3.1"]}
+
+# ---------------------------------------------------------------------------
+# Engines. Facts here are load-bearing; keep them accurate.
+# ---------------------------------------------------------------------------
+engines:
+  skillspector:
+    remote: "https://github.com/NVIDIA/SkillSpector"
+    license: "Apache-2.0"
+    role: "primary SAST / agentic-skill scanner"
+    patterns: 71
+    categories: 17
+    id_prefixes: [P, AR, E, PE, SC, EA, OH, MP, TP, LP]
+    note: "71 patterns across 17 categories per the SkillSpector README. Use its real ids (for example PE1-PE3, E1-E4, SC1-SC9); do not invent higher ids."
+    isolation: "venv (dependency separation only, not a security boundary)"
+  strix:
+    remote: "https://github.com/usestrix/strix"
+    license: "Apache-2.0"
+    role: "autonomous pentesting agent"
+    interface: "public CLI + SARIF/JSON (do not depend on internal skill names)"
+    isolation: "container (treat as untrusted; drop capabilities)"
+  cubesandbox:
+    remote: "https://github.com/TencentCloud/CubeSandbox"
+    license: "Apache-2.0"
+    role: "hardware-isolated dynamic evaluation"
+    host_requirements: "x86_64 Linux with KVM"
+    note: "multi-service platform, not a single local Rust binary; macOS can host a client, not the full local runtime"
+  ponytail:
+    remote: "https://github.com/DietrichGebert/ponytail"
+    license: "MIT"
+    role: "code-minimization agent policy / plugin (not a security-review engine)"
+
+# ---------------------------------------------------------------------------
+# Detection domains. `status` uses coverage_status above. As of milestone 0,
+# nothing is INTEGRATED or VERIFIED; upstream capability is AVAILABLE_UPSTREAM,
+# and domains needing an engine not yet present are UNAVAILABLE.
+# ---------------------------------------------------------------------------
+detection_domains:
+  sql_injection: {layer: 2, engine: strix, status: AVAILABLE_UPSTREAM, refs: [owasp_web_2021:A03]}
+  xss: {layer: 2, engine: strix, status: AVAILABLE_UPSTREAM, refs: [owasp_web_2021:A03]}
+  csrf: {layer: 2, engine: strix, status: AVAILABLE_UPSTREAM}
+  ssrf: {layer: 2, engine: strix, status: AVAILABLE_UPSTREAM, refs: [owasp_web_2021:A10]}
+  idor_bola: {layer: 3, engine: strix, status: AVAILABLE_UPSTREAM, refs: [owasp_api_2023:API1]}
+  broken_auth: {layer: 3, engine: strix, status: AVAILABLE_UPSTREAM, refs: [owasp_api_2023:API2]}
+  jwt_oauth: {layer: 3, engine: strix, status: AVAILABLE_UPSTREAM, refs: [owasp_api_2023:API2]}
+  graphql: {layer: 3, engine: strix, status: AVAILABLE_UPSTREAM}
+  path_traversal: {layer: 6, engine: skillspector, status: AVAILABLE_UPSTREAM}
+  insecure_deserialization: {layer: 6, engine: skillspector, status: AVAILABLE_UPSTREAM}
+  secrets: {layer: 6, engine: skillspector, status: AVAILABLE_UPSTREAM}
+  supply_chain: {layer: 6, engine: skillspector, status: AVAILABLE_UPSTREAM, refs: [owasp_agentic_2026:ASI04]}
+  port_scanning: {layer: 4, engine: nmap, status: UNAVAILABLE, note: "adapter not built"}
+  active_directory: {layer: 4, engine: strix, status: AVAILABLE_UPSTREAM}
+  cloud_iam: {layer: 5, engine: strix, status: AVAILABLE_UPSTREAM}
+  indirect_prompt_injection: {layer: 7, engine: skillspector, status: AVAILABLE_UPSTREAM, refs: [owasp_agentic_2026:ASI01, mitre_atlas:AML.T0051]}
+  mcp_tool_poisoning: {layer: 7, engine: skillspector, status: AVAILABLE_UPSTREAM, refs: [owasp_agentic_2026:ASI02]}
+  excessive_agency: {layer: 7, engine: skillspector, status: AVAILABLE_UPSTREAM, refs: [owasp_agentic_2026:ASI03]}
+  memory_poisoning: {layer: 7, engine: skillspector, status: AVAILABLE_UPSTREAM, refs: [owasp_agentic_2026:ASI06]}
+  multi_agent_a2a: {layer: 7, engine: scanagenticrisk, status: NOT_EVALUATED, refs: [owasp_agentic_2026:ASI07]}
+  browser_computer_use: {layer: 7, engine: scanagenticrisk, status: NOT_EVALUATED}
+  exploitation: {layer: 8, engine: metasploit, status: UNAVAILABLE, gated: true}
+  privilege_escalation: {layer: 9, engine: strix, status: AVAILABLE_UPSTREAM, gated: true}
+  lateral_movement: {layer: 9, engine: metasploit, status: UNAVAILABLE, gated: true}

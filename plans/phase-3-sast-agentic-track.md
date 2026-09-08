@@ -11,15 +11,16 @@ Layers 6-7: Static Analysis (SAST), Agentic Security. This is WRAITH's **unique 
 ## Deliverables
 
 1. **SAST layer (Layer 6)**
-   - SkillSpector integration — 18 pattern categories (static analysis, MCP tool poisoning, supply chain, behavioral AST, YARA)
-   - Pattern families (verified in SkillSpector source):
-     - TP1-TP4: MCP tool poisoning
-     - EA1-EA5: excessive agency
-     - MP1-MP3: memory poisoning
-     - P-series: prompt injection (P1-P4, P9)
-     - SC-series: supply chain
-     - PE1-PE5: privilege escalation
-     - LP: least privilege
+   - SkillSpector integration: 71 patterns across 17 categories (static analysis, MCP tool poisoning, supply chain, behavioral AST, YARA)
+   - Pattern families (authoritative ids live in the SkillSpector README; mirrored in taxonomy/capabilities.yaml):
+     - Prompt Injection: P1-P5, P9
+     - Anti-Refusal: AR1-AR3
+     - Data Exfiltration: E1-E4
+     - Privilege Escalation: PE1-PE3
+     - Supply Chain: SC1-SC9
+     - Excessive Agency: EA1-EA5
+     - Output Handling: OH1-OH3
+     - MCP: mcp_tool_poisoning, mcp_least_privilege, mcp_rug_pull analyzers
    - Input hardening via `input_handler.py` (100 MiB, 10K zip, O_PATH)
 2. **Agentic security layer (Layer 7)**
    - Agent skill scanning for malicious/excessive-capability skills

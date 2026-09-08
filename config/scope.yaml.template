@@ -1,9 +1,19 @@
-# Target scope allowlist — template
+# Target scope allowlist, template.
 # Copy to scope.yaml and populate for each engagement.
-# Empty scope = no targets allowed (safe default).
+# Empty or disabled scope means no targets allowed (fail closed).
+#
+# Matching (see src/orchestrator/scope.py):
+#   cidrs      real network containment, for example 10.0.0.0/24 or 2001:db8::/32
+#   domains    exact host or a true subdomain; example.com does NOT match
+#              example.com.attacker.test
+#   urls       scheme + host + port + path-boundary prefix
+#   repo_paths canonical, symlink-resolved containment of a directory
+# blocklist is evaluated first: a block entry always wins over an allow entry.
 
 scope:
-  enabled: false  # Set true to enforce scope
+  enabled: false          # set true only after the scope below is reviewed
+  allow_metadata: false   # block the cloud metadata address unless explicitly true
+  block_private: false    # set true to also block private/loopback/link-local hosts
   allowlist:
     cidrs: []
     domains: []
@@ -12,3 +22,5 @@ scope:
   blocklist:
     cidrs: []
     domains: []
+    urls: []
+    repo_paths: []

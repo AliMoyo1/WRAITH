@@ -1,53 +1,71 @@
 # WRAITH Engine Configuration
 # Copy this template to engines.yaml and edit paths for your machine.
+#
+# Isolation semantics (important):
+#   A Python venv provides DEPENDENCY separation, not a security boundary. A
+#   hostile target scanned inside a venv can still read and write the host
+#   filesystem and open network connections. Real isolation requires an
+#   OS-level sandbox (container with dropped capabilities, seccomp, network
+#   policy) or a VM. Each engine adapter should run as an external process with
+#   a versioned JSON contract, strict timeouts, a constrained filesystem view,
+#   an explicit network policy, and a pinned engine digest.
 
 engines:
   skillspector:
     path: ./repos/SkillSpector
     type: python
     venv: .venvs/skillspector
-    isolation: venv
+    isolation: venv            # dependency separation only, not a security boundary
+    role: primary SAST / agentic-skill scanner
     license: Apache-2.0
 
   strix:
     path: ./repos/strix
     type: python
     venv: .venvs/strix
-    isolation: venv
+    isolation: container       # Docker-managed; treat as untrusted, drop caps
+    role: autonomous pentesting agent
+    interface: cli+sarif       # use its public CLI and SARIF/JSON output, not internal skill names
     license: Apache-2.0
 
   cubesandbox:
     path: ./repos/CubeSandbox
-    type: rust
-    isolation: binary
+    type: service              # multi-service platform, NOT a single local Rust binary
+    host_requirements: x86_64 Linux with KVM
+    isolation: hardware-vm     # KVM/RustVMM; macOS can host a client but not the full local runtime
+    role: hardware-isolated dynamic evaluation
     license: Apache-2.0
 
   ponytail:
     path: ./repos/ponytail
     type: node
     isolation: npx
+    role: code-minimization agent policy / plugin (not a security-review engine)
     license: MIT
 
   metasploit:
-    path: ""  # System install, not bundled
+    path: ""                   # System install, not bundled
     type: system
     command: msfconsole
     license: BSD
+    gated: true                # Layer 8; requires engagement + approval token
 
   sqlmap:
-    path: ""  # System install, not bundled
+    path: ""                   # System install, not bundled
     type: system
     command: sqlmap
-    license: GPLv2
+    license: GPLv2             # distribution nuance: needs per-artifact legal review, not "no restrictions"
+    gated: true
 
   burp:
-    path: ""  # Commercial, user-installed only
+    path: ""                   # Commercial, user-installed only
     type: system
     command: burpsuite
     license: Commercial
+    gated: true
 
 # Orchestrator settings
 orchestrator:
   max_parallel: 3
   kill_switch_timeout: 5
-  human_gate_required: false  # Set true before Layer 8-9 work
+  human_gate_required: true    # safe default: require a human gate before Layer 8-9 work
