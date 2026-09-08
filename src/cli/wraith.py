@@ -26,6 +26,7 @@ if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 import config  # noqa: E402
+from adapters import ADAPTERS, AdapterRequest  # noqa: E402
 from orchestrator import Engagement, Scope, now_utc  # noqa: E402
 from orchestrator.scope import classify_target  # noqa: E402
 from store import ResultStore, ResultStoreError  # noqa: E402
@@ -38,6 +39,7 @@ _DEFAULT_SCOPE = _CONFIG_DIR / "scope.yaml"
 _DEFAULT_ENGAGE = _CONFIG_DIR / "engagement.json"
 _KILL_FLAG = _CONFIG_DIR / ".killed"
 _RESULTS_ROOT = _REPO_ROOT / "results"
+_ENGINE_DIRS = {"skillspector": "repos/SkillSpector"}
 
 
 def _scope_path(args) -> Path:
@@ -210,6 +212,57 @@ def cmd_report(args) -> int:
     return 0 if intact else 2
 
 
+def _build_adapter(name: str):
+    if name not in ADAPTERS:
+        return None, f"unknown engine: {name} (known: {', '.join(sorted(ADAPTERS))})"
+    engine_path = _REPO_ROOT / _ENGINE_DIRS.get(name, f"repos/{name}")
+    pin = None
+    lock = _CONFIG_DIR / "engines.lock.yaml"
+    if lock.exists():
+        data = config._load_mapping(lock)
+        pin = ((data.get("engines") or {}).get(name) or {}).get("commit")
+    return ADAPTERS[name](engine_path, pinned_commit=pin), None
+
+
+def cmd_engine(args) -> int:
+    if args.action == "list":
+        for name in sorted(ADAPTERS):
+            print(name)
+        return 0
+    if not args.name:
+        print("engine name required for check/run")
+        return 2
+    adapter, err = _build_adapter(args.name)
+    if err:
+        print(err)
+        return 2
+    if args.action == "check":
+        ok, reason = adapter.is_available()
+        print(f"{args.name}: {'available' if ok else 'unavailable'} ({reason})")
+        return 0 if ok else 1
+    # run
+    if not args.target:
+        print("target required for run")
+        return 2
+    request = AdapterRequest(target=args.target, timeout_seconds=args.timeout, no_llm=not args.llm)
+    result = adapter.run(request)
+    coverage = result.coverage.get("status")
+    print(f"{args.name}: status={result.status} findings={len(result.findings)} coverage={coverage}")
+    for e in result.errors:
+        print(f"  error: {e}")
+    if args.store and result.status == "OK" and result.findings:
+        try:
+            key = config.result_key()
+        except RuntimeError as exc:
+            print(str(exc))
+            return 2
+        store = ResultStore(_RESULTS_ROOT, args.store, key, actor=f"engine:{args.name}")
+        for finding in result.findings:
+            store.put_finding(finding)
+        print(f"stored {len(result.findings)} finding(s) under engagement {args.store}")
+    return 0 if result.status in ("OK", "UNAVAILABLE") else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="wraith", description="Full-spectrum offensive security platform")
     parser.add_argument("--version", action="version", version=f"WRAITH v{__version__}")
@@ -245,6 +298,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_report.add_argument("--export", help="decrypt findings to this JSON path")
     p_report.add_argument("--actor", help="who is running the report (recorded in the audit log)")
     p_report.set_defaults(func=cmd_report)
+
+    p_engine = sub.add_parser("engine", help="list, check, or run an engine adapter")
+    p_engine.add_argument("action", choices=["list", "check", "run"])
+    p_engine.add_argument("name", nargs="?", help="engine name (for check/run)")
+    p_engine.add_argument("target", nargs="?", help="target to scan (for run)")
+    p_engine.add_argument("--store", help="engagement id to store OK findings under")
+    p_engine.add_argument("--timeout", type=float, default=300.0, help="engine timeout in seconds")
+    p_engine.add_argument("--llm", action="store_true", help="enable LLM augmentation (default off)")
+    p_engine.set_defaults(func=cmd_engine)
     return parser
 
 
