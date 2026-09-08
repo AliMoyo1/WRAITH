@@ -15,9 +15,13 @@ from .base import (
     run_subprocess,
 )
 from .skillspector import SkillSpectorAdapter
+from .strix import StrixAdapter
 
 # Registry of known adapter names to their classes.
-ADAPTERS = {SkillSpectorAdapter.name: SkillSpectorAdapter}
+ADAPTERS = {
+    SkillSpectorAdapter.name: SkillSpectorAdapter,
+    StrixAdapter.name: StrixAdapter,
+}
 
 __all__ = [
     "ADAPTERS",
@@ -26,6 +30,7 @@ __all__ = [
     "AdapterResult",
     "EngineAdapter",
     "SkillSpectorAdapter",
+    "StrixAdapter",
     "SubprocessResult",
     "run_subprocess",
 ]

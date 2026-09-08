@@ -39,7 +39,7 @@ _DEFAULT_SCOPE = _CONFIG_DIR / "scope.yaml"
 _DEFAULT_ENGAGE = _CONFIG_DIR / "engagement.json"
 _KILL_FLAG = _CONFIG_DIR / ".killed"
 _RESULTS_ROOT = _REPO_ROOT / "results"
-_ENGINE_DIRS = {"skillspector": "repos/SkillSpector"}
+_ENGINE_DIRS = {"skillspector": "repos/SkillSpector", "strix": "repos/strix"}
 
 
 def _scope_path(args) -> Path:
