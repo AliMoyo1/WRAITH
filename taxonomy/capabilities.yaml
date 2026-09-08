@@ -106,10 +106,15 @@ engines:
     remote: "https://github.com/NVIDIA/SkillSpector"
     license: "Apache-2.0"
     role: "primary SAST / agentic-skill scanner"
-    patterns: 71
-    categories: 17
-    id_prefixes: [P, AR, E, PE, SC, EA, OH, MP, TP, LP]
-    note: "71 patterns across 17 categories per the SkillSpector README. Use its real ids (for example PE1-PE3, E1-E4, SC1-SC9); do not invent higher ids."
+    patterns: 71          # per README; the pinned source registry (DEFAULT_EXPLANATIONS) currently defines ~90
+    categories: 17        # per README; the PatternCategory enum has 18 (adds Server-Side Request Forgery, Insecure Deserialization)
+    id_prefixes: [P, AR, E, PE, SC, EA, OH, MP, TP, LP, BH, TM, RA, AS, TR, TT, YR, SSRF, DS, AST]
+    note: >-
+      Counts are per the SkillSpector README (71 patterns / 17 categories). The pinned source
+      defines more: the PatternCategory enum has 18 categories and the DEFAULT_EXPLANATIONS registry
+      about 90 pattern ids. id_prefixes lists the registry prefixes (JSON output uses the enum VALUE
+      form, for example "Prompt Injection", not "prompt_injection"). Treat SkillSpector's source as
+      authoritative and re-derive on a version bump; do not invent ids.
     isolation: "venv (dependency separation only, not a security boundary)"
   strix:
     remote: "https://github.com/usestrix/strix"

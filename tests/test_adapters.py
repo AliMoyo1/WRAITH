@@ -11,13 +11,13 @@ CANNED = {
         {
             "finding_id": "finding-abc", "rule_id": "PE3", "message": "Credential access",
             "severity": "HIGH", "confidence": 0.9, "file": "skill.py", "start_line": 10,
-            "end_line": 12, "category": "privilege_escalation", "remediation": "scope down",
+            "end_line": 12, "category": "Privilege Escalation", "remediation": "scope down",
             "match_fingerprint": "fp1",
         },
         {
             "finding_id": "finding-def", "rule_id": "P1", "message": "Instruction override",
             "severity": "INFO", "confidence": 0.4, "file": "SKILL.md", "start_line": 1,
-            "category": "prompt_injection",
+            "category": "Prompt Injection",
         },
     ]
 }
@@ -55,6 +55,30 @@ def test_normalization_maps_fields_and_layers(tmp_path):
     assert b["layer"] == 7 and b["severity"] == "INFORMATIONAL" and b["confidence"] == "LOW"
     for f in result.findings:
         _valid_finding(f)
+
+
+def test_real_category_values_map_to_layers(tmp_path):
+    # Regression guard for the StrEnum value form ("Prompt Injection", not
+    # "prompt_injection"). With the old snake_case set every finding wrongly
+    # landed in layer 6.
+    cats = {
+        "Prompt Injection": 7, "Anti-Refusal": 7, "MCP Tool Poisoning": 7,
+        "Excessive Agency": 7, "Memory Poisoning": 7, "Agent Snooping": 7,
+        "Output Handling": 7,
+        "Data Exfiltration": 6, "Insecure Deserialization": 6,
+        "Server-Side Request Forgery": 6, "Supply Chain": 6, "YARA Match": 6,
+    }
+    findings = [
+        {"finding_id": f"f{i}", "rule_id": "X", "severity": "LOW", "confidence": 0.5, "category": c}
+        for i, c in enumerate(cats)
+    ]
+
+    def runner(_request):
+        return SubprocessResult(returncode=0, stdout=json.dumps({"findings": findings}), stderr="")
+
+    result = _adapter(tmp_path).run(AdapterRequest(target="repo"), runner=runner)
+    for i, (category, expected) in enumerate(cats.items()):
+        assert result.findings[i]["layer"] == expected, f"{category} -> {result.findings[i]['layer']}"
 
 
 def test_unavailable_engine_is_not_evaluated(tmp_path):
