@@ -89,6 +89,49 @@ def test_audit_tamper_detected(tmp_path):
     assert s.verify_audit() is False
 
 
+def test_tail_truncation_detected(tmp_path):
+    s = _store(tmp_path)
+    s.put_finding({"finding_id": "f1"})
+    s.put_finding({"finding_id": "f2"})
+    s.put_finding({"finding_id": "f3"})
+    assert s.verify_audit() is True
+    # Drop the most recent audit entry; the (unforgeable) tip still points past it.
+    lines = s.audit_path.read_text(encoding="utf-8").splitlines()
+    s.audit_path.write_text("\n".join(lines[:-1]) + "\n", encoding="utf-8")
+    assert s.verify_audit() is False
+
+
+def test_missing_tip_detected(tmp_path):
+    s = _store(tmp_path)
+    s.put_finding({"finding_id": "f1"})
+    s.tip_path.unlink()
+    assert s.verify_audit() is False
+
+
+def test_forged_tip_rejected(tmp_path):
+    s = _store(tmp_path)
+    s.put_finding({"finding_id": "f1"})
+    s.put_finding({"finding_id": "f2"})
+    lines = s.audit_path.read_text(encoding="utf-8").splitlines()
+    s.audit_path.write_text("\n".join(lines[:-1]) + "\n", encoding="utf-8")
+    # An attacker without the audit key cannot recompute a matching tip_mac.
+    s.tip_path.write_text(json.dumps({"seq": 0, "mac": "x", "tip_mac": "forged"}), encoding="utf-8")
+    assert s.verify_audit() is False
+
+
+def test_external_tip_anchor(tmp_path):
+    external = tmp_path / "anchors" / "eng.tip"
+    s = ResultStore(tmp_path / "results", EID, MASTER, actor="t", tip_anchor_path=external)
+    s.put_finding({"finding_id": "f1"})
+    assert external.exists()
+    assert s.verify_audit() is True
+
+
+def test_empty_audit_is_valid(tmp_path):
+    s = _store(tmp_path)
+    assert s.verify_audit() is True  # no log and no tip
+
+
 def test_failed_get_is_audited(tmp_path):
     _store(tmp_path, master=MASTER).put_finding({"finding_id": "f1", "x": 1})
     other = _store(tmp_path, master=b"wrong-key")
