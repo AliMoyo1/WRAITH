@@ -94,7 +94,16 @@ frameworks:
   mitre_atlas:
     name: "MITRE ATLAS"
     source: "https://atlas.mitre.org/"
-    rule: "Verify every AML.Txxxx against the source. AML.T0058 is Publish Poisoned Models, not Excessive Agency."
+    verified: "2026-09-08"
+    techniques:
+      AML.T0051: "LLM Prompt Injection"
+      AML.T0010: "AI Supply Chain Compromise"
+      AML.T0057: "LLM Data Leakage"
+      AML.T0058: "Publish Poisoned Model"
+    note: >-
+      Ids verified against the source on the date above. Agent memory / context poisoning has no
+      confirmed dedicated ATLAS technique; the closest is RAG Poisoning (2025 release), id to be
+      confirmed. Do not invent ids; re-derive on an ATLAS release change.
   cwe: {name: "CWE"}
   cvss: {primary: "4.0", import_compatible: ["3.1"]}
 
@@ -150,7 +159,7 @@ detection_domains:
   path_traversal: {layer: 6, engine: skillspector, status: AVAILABLE_UPSTREAM}
   insecure_deserialization: {layer: 6, engine: skillspector, status: AVAILABLE_UPSTREAM}
   secrets: {layer: 6, engine: skillspector, status: AVAILABLE_UPSTREAM}
-  supply_chain: {layer: 6, engine: skillspector, status: AVAILABLE_UPSTREAM, refs: [owasp_agentic_2026:ASI04]}
+  supply_chain: {layer: 6, engine: skillspector, status: AVAILABLE_UPSTREAM, refs: [owasp_agentic_2026:ASI04, mitre_atlas:AML.T0010]}
   port_scanning: {layer: 4, engine: nmap, status: UNAVAILABLE, note: "adapter not built"}
   active_directory: {layer: 4, engine: strix, status: AVAILABLE_UPSTREAM}
   cloud_iam: {layer: 5, engine: strix, status: AVAILABLE_UPSTREAM}
