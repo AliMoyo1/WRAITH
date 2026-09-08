@@ -28,6 +28,7 @@ if str(_SRC) not in sys.path:
 import config  # noqa: E402
 from orchestrator import Engagement, Scope, now_utc  # noqa: E402
 from orchestrator.scope import classify_target  # noqa: E402
+from store import ResultStore, ResultStoreError  # noqa: E402
 
 __version__ = "2.1"
 
@@ -36,6 +37,7 @@ _CONFIG_DIR = _REPO_ROOT / "config"
 _DEFAULT_SCOPE = _CONFIG_DIR / "scope.yaml"
 _DEFAULT_ENGAGE = _CONFIG_DIR / "engagement.json"
 _KILL_FLAG = _CONFIG_DIR / ".killed"
+_RESULTS_ROOT = _REPO_ROOT / "results"
 
 
 def _scope_path(args) -> Path:
@@ -185,8 +187,27 @@ def cmd_kill(args) -> int:
 
 
 def cmd_report(args) -> int:
-    print(f"[skeleton] report for engagement {args.engagement}")
-    return 0
+    try:
+        key = config.result_key()
+    except RuntimeError as exc:
+        print(str(exc))
+        return 2
+    try:
+        store = ResultStore(_RESULTS_ROOT, args.engagement, key, actor=args.actor or "cli")
+    except ResultStoreError as exc:
+        print(f"refused: {exc}")
+        return 2
+    findings = store.list_findings()
+    intact = store.verify_audit()
+    print(f"engagement {args.engagement}: {len(findings)} finding(s); audit chain {'intact' if intact else 'TAMPERED'}")
+    if args.export:
+        try:
+            out = store.export(args.export)
+        except ResultStoreError as exc:
+            print(f"export failed: {exc}")
+            return 2
+        print(f"exported {len(findings)} finding(s) to {out}")
+    return 0 if intact else 2
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -219,8 +240,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_kill.add_argument("--reset", action="store_true", help="clear the kill-switch")
     p_kill.set_defaults(func=cmd_kill)
 
-    p_report = sub.add_parser("report", help="generate report")
-    p_report.add_argument("engagement")
+    p_report = sub.add_parser("report", help="summarize or export an engagement's encrypted results")
+    p_report.add_argument("engagement", help="engagement id (the results are stored under results/<id>/)")
+    p_report.add_argument("--export", help="decrypt findings to this JSON path")
+    p_report.add_argument("--actor", help="who is running the report (recorded in the audit log)")
     p_report.set_defaults(func=cmd_report)
     return parser
 

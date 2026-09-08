@@ -7,7 +7,7 @@ name = "wraith"
 version = "2.1.0"
 description = "WRAITH authorization kernel and CLI (Phase 0)"
 requires-python = ">=3.11"
-dependencies = ["pyyaml>=6"]
+dependencies = ["pyyaml>=6", "cryptography>=42"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.6", "mypy>=1.11"]

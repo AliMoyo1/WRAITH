@@ -21,6 +21,7 @@ except Exception:  # pragma: no cover - exercised only without PyYAML
     _HAVE_YAML = False
 
 SIGNING_KEY_ENV = "WRAITH_SIGNING_KEY"
+RESULT_KEY_ENV = "WRAITH_RESULT_KEY"
 
 
 def _load_mapping(path: Path) -> dict[str, Any]:
@@ -124,5 +125,20 @@ def signing_key() -> bytes:
         raise RuntimeError(
             f"{SIGNING_KEY_ENV} is not set. Export an operator signing key before "
             "starting or verifying an engagement."
+        )
+    return raw.encode("utf-8")
+
+
+def result_key() -> bytes:
+    """Return the operator result-store master key from the environment, or raise.
+
+    Distinct from the signing key: encryption and signing keys should not be
+    reused. There is deliberately no default.
+    """
+    raw = os.environ.get(RESULT_KEY_ENV)
+    if not raw or not raw.strip():
+        raise RuntimeError(
+            f"{RESULT_KEY_ENV} is not set. Export a result-store master key before "
+            "reading or exporting engagement results."
         )
     return raw.encode("utf-8")
