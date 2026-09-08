@@ -7,11 +7,9 @@ pinned versions are in [`config/engines.lock.yaml`](config/engines.lock.yaml).
 
 ## WRAITH's own license
 
-> **Decision required.** This branch adds an Apache-2.0 [`LICENSE`](LICENSE) as a
-> proposed default. It is not final until you confirm it. Change it before merge
-> if you intend a different model.
+> **Confirmed: Apache-2.0** (Ali Moyo, 2026-09-08). The [`LICENSE`](LICENSE) file is final.
 
-Recommendation: **Apache-2.0**, because:
+Rationale for **Apache-2.0**:
 
 - The three primary engines (SkillSpector, Strix, CubeSandbox) are Apache-2.0,
   so a permissive, patent-grant license aligns with the ecosystem WRAITH sits in.
