@@ -1,0 +1,73 @@
+# WRAITH engine lockfile.
+#
+# WRAITH does not bundle these engines; the operator clones them into ./repos/.
+# This lock records the exact commit WRAITH was reviewed and tested against.
+# Verify a pin before use:
+#   git -C repos/<name> rev-parse HEAD   must equal the commit below.
+# For released binaries or container images (for example CubeSandbox), pin a
+# published digest here before running that engine.
+
+lockfile_version: 1
+generated: "2026-09-08"
+
+engines:
+  skillspector:
+    remote: "https://github.com/NVIDIA/SkillSpector"
+    commit: "704bc9544260c2f41222dc0f92982521709496ab"
+    reviewed: "2026-09-07"
+    license: "Apache-2.0"
+    consumption: "source, cloned into ./repos (not redistributed)"
+  strix:
+    remote: "https://github.com/usestrix/strix"
+    commit: "52b19233477a783004467c1522651eec96015e73"
+    reviewed: "2026-09-06"
+    license: "Apache-2.0"
+    consumption: "source, run in a container"
+  cubesandbox:
+    remote: "https://github.com/TencentCloud/CubeSandbox"
+    commit: "d38cb6e5e49294cb03e7f41248aea6d66e916a76"
+    reviewed: "2026-09-07"
+    license: "Apache-2.0"
+    consumption: "service, x86_64 Linux + KVM; pin a release image digest before use"
+    image_digest: null  # TODO: pin when a release image is selected
+  ponytail:
+    remote: "https://github.com/DietrichGebert/ponytail"
+    commit: "356918eba965ee1eac64bd3a7f0dd02108350de5"
+    reviewed: "2026-09-07"
+    license: "MIT"
+    consumption: "source, node plugin"
+
+# External tools are invoked from the host and never bundled. They are gated
+# behind engagement authorization where they perform consequential actions.
+external_tools:
+  metasploit:
+    source: "https://github.com/rapid7/metasploit-framework"
+    license: "BSD-3-Clause"
+    bundled: false
+    gated: true
+  sqlmap:
+    source: "https://github.com/sqlmapproject/sqlmap"
+    license: "GPL-2.0"
+    bundled: false
+    gated: true
+    note: "GPL-2.0. Redistribution needs per-artifact legal review; not a blanket exclusion."
+  burp:
+    source: "https://portswigger.net/burp"
+    license: "Commercial"
+    bundled: false
+    gated: true
+  nmap:
+    source: "https://nmap.org/"
+    license: "NPSL"
+    bundled: false
+    note: "Nmap Public Source License restricts redistribution inside proprietary products; commercial redistribution requires an OEM license (https://nmap.org/npsl/)."
+  shodan:
+    source: "https://www.shodan.io/"
+    license: "Commercial API / ToS"
+    bundled: false
+
+# Not a WRAITH engine. Recorded here so it is never mistaken for one.
+excluded:
+  handy:
+    remote: "https://github.com/cjpais/Handy"
+    reason: "Unrelated speech-to-text software. Not used by WRAITH. Voice transcription must never serve as authorization or identity evidence."
