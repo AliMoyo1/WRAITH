@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from entitlement import CapabilityGrant
 from orchestrator import ApprovalToken, Engagement, Scope, ScopeList
 
 try:  # optional dependency; JSON always works
@@ -23,6 +24,7 @@ except Exception:  # pragma: no cover - exercised only without PyYAML
 
 SIGNING_KEY_ENV = "WRAITH_SIGNING_KEY"
 RESULT_KEY_ENV = "WRAITH_RESULT_KEY"
+ENTITLEMENT_KEY_ENV = "WRAITH_ENTITLEMENT_KEY"
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 # Durable record of spent approval-token nonces. Lives under the gitignored
@@ -193,3 +195,33 @@ def mark_token_consumed(nonce: str, path: str | Path | None = None) -> None:
     consumed[nonce] = datetime.now(UTC).isoformat()
     data["consumed"] = consumed
     p.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+# ---- entitlement: key and capability-grant serialization -------------------
+
+
+def entitlement_key() -> bytes:
+    """Return the operator entitlement signing key from the environment, or raise.
+
+    Distinct from the engagement signing key and the result-store key: keys are
+    not reused across purposes. There is deliberately no default.
+    """
+    raw = os.environ.get(ENTITLEMENT_KEY_ENV)
+    if not raw or not raw.strip():
+        raise RuntimeError(
+            f"{ENTITLEMENT_KEY_ENV} is not set. Export an entitlement signing key "
+            "before issuing or verifying capability grants."
+        )
+    return raw.encode("utf-8")
+
+
+def save_grant(path: str | Path, grant: CapabilityGrant) -> None:
+    """Write a signed capability grant to a file as a whole, verifiable object."""
+    _dump_mapping(Path(path), {"capability_grant": grant.to_dict()})
+
+
+def load_grant(path: str | Path) -> CapabilityGrant:
+    """Load a serialized capability grant written by save_grant."""
+    data = _load_mapping(Path(path))
+    node = data.get("capability_grant", data)
+    return CapabilityGrant.from_dict(node)
