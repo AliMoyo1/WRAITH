@@ -1,0 +1,324 @@
+# WRAITH Red Team Annex — capability routing table.
+#
+# Maps onto the canonical taxonomy in taxonomy/capabilities.yaml.
+# Phase names here are PRESENTATION labels only, NOT a new phase model.
+# The canonical layer numbers from taxonomy/capabilities.yaml are the source of truth.
+#
+# Copy to redteam_capabilities.yaml (without .template) and customize.
+
+version: "2.1"
+
+# Presentation labels for the CLI dashboard. These are NOT a phase model.
+# The underlying enforcement uses the canonical layers and tracks.
+presentation:
+  phases:
+    recon:
+      label: "Recon"
+      description: "Target acquisition, DNS, WHOIS, port scanning"
+      layers: [0, 1]
+      gate: "none"
+    probe:
+      label: "Probe"
+      description: "Vulnerability detection across web, API, network, cloud, SAST, agentic"
+      layers: [2, 3, 4, 5, 6, 7]
+      gate: "checklist"
+    exploit:
+      label: "Exploit"
+      description: "Active exploitation of confirmed vulnerabilities"
+      layers: [8]
+      gate: "human"
+    post_exploit:
+      label: "Post-Exploit"
+      description: "Post-exploitation, privilege escalation, lateral movement"
+      layers: [9]
+      gate: "human"
+
+# Capabilities reference detection_domains from taxonomy/capabilities.yaml.
+# Each capability maps to one or more canonical detection_domains.
+capabilities:
+  - id: recon_passive
+    label: "Passive Reconnaissance"
+    detection_domains: []
+    layers: [0]
+    target_types: [domain, url, ip, cidr]
+    tools: [whois, dig, curl, shodan]
+    description: "WHOIS, DNS records, certificate transparency, Shodan"
+  - id: recon_active
+    label: "Active Reconnaissance"
+    detection_domains: [port_scanning]
+    layers: [1]
+    target_types: [ip, cidr, domain, url]
+    tools: [nmap, masscan]
+    description: "Port scanning, service detection, network mapping"
+
+  - id: web_sqli
+    label: "SQL Injection"
+    detection_domains: [sql_injection]
+    layers: [2]
+    target_types: [url, api]
+    prerequisites: [recon_passive, recon_active]
+    interlinks: [exploit_sqlmap]
+  - id: web_xss
+    label: "Cross-Site Scripting"
+    detection_domains: [xss]
+    layers: [2]
+    target_types: [url]
+  - id: web_csrf
+    label: "CSRF"
+    detection_domains: [csrf]
+    layers: [2]
+    target_types: [url]
+  - id: web_ssrf
+    label: "SSRF"
+    detection_domains: [ssrf]
+    layers: [2]
+    target_types: [url, api]
+  - id: web_path_traversal
+    label: "Path Traversal"
+    detection_domains: [path_traversal]
+    layers: [2]
+    target_types: [url, api]
+  - id: web_file_upload
+    label: "File Upload Abuse"
+    detection_domains: [file_upload]
+    layers: [2]
+    target_types: [url, api]
+  - id: web_rce
+    label: "Remote Code Execution"
+    detection_domains: [rce]
+    layers: [2]
+    target_types: [url, api]
+  - id: web_info_disclosure
+    label: "Information Disclosure"
+    detection_domains: [info_disclosure]
+    layers: [2]
+    target_types: [url, api]
+  - id: web_wordpress
+    label: "WordPress Enumeration"
+    detection_domains: [wordpress]
+    layers: [2]
+    target_types: [url]
+
+  - id: api_idor
+    label: "IDOR / BOLA"
+    detection_domains: [idor_bola]
+    layers: [3]
+    target_types: [api, url]
+  - id: api_auth
+    label: "Broken Authentication"
+    detection_domains: [broken_auth]
+    layers: [3]
+    target_types: [api, url]
+  - id: api_jwt
+    label: "JWT / OAuth Testing"
+    detection_domains: [jwt_oauth]
+    layers: [3]
+    target_types: [api, url]
+  - id: api_graphql
+    label: "GraphQL Introspection"
+    detection_domains: [graphql]
+    layers: [3]
+    target_types: [api, url]
+  - id: api_fuzzing
+    label: "API Fuzzing"
+    detection_domains: [api_fuzzing]
+    layers: [3]
+    target_types: [api, url]
+
+  - id: network_scan
+    label: "Port & Service Enumeration"
+    detection_domains: [port_scanning]
+    layers: [4]
+    target_types: [ip, cidr, domain]
+    tools: [nmap]
+  - id: network_smtp
+    label: "SMTP Testing"
+    detection_domains: [smtp]
+    layers: [4]
+    target_types: [ip, domain]
+  - id: network_ssh
+    label: "SSH Auditing"
+    detection_domains: [ssh]
+    layers: [4]
+    target_types: [ip]
+  - id: network_ad_enum
+    label: "Active Directory Enumeration"
+    detection_domains: [ad_enumeration]
+    layers: [4]
+    target_types: [ip, domain]
+
+  - id: cloud_iam
+    label: "Cloud IAM Assessment"
+    detection_domains: [cloud_iam]
+    layers: [5]
+    target_types: [domain, url, api]
+  - id: cloud_gcp
+    label: "GCP-Specific Audit"
+    detection_domains: [gcp_audit]
+    layers: [5]
+    target_types: [domain, url]
+
+  - id: sast_secrets
+    label: "Secret Detection"
+    detection_domains: [secrets]
+    layers: [6]
+    target_types: [repo_path, url]
+  - id: sast_deserialization
+    label: "Insecure Deserialization"
+    detection_domains: [insecure_deserialization]
+    layers: [6]
+    target_types: [repo_path, url]
+  - id: sast_supply_chain
+    label: "Supply Chain"
+    detection_domains: [supply_chain]
+    layers: [6]
+    target_types: [repo_path, url]
+  - id: sast_code_review
+    label: "Code Review / SAST"
+    detection_domains: [sast_code_review]
+    layers: [6]
+    target_types: [repo_path, url]
+
+  - id: agentic_prompt_injection
+    label: "Prompt Injection Testing"
+    detection_domains: [indirect_prompt_injection]
+    layers: [7]
+    target_types: [url, api, repo_path]
+  - id: agentic_tool_misuse
+    label: "Tool Misuse & Exploitation"
+    detection_domains: [mcp_tool_poisoning]
+    layers: [7]
+    target_types: [url, api, repo_path]
+  - id: agentic_excessive_agency
+    label: "Excessive Agency"
+    detection_domains: [excessive_agency]
+    layers: [7]
+    target_types: [url, api, repo_path]
+
+  - id: exploit_sqlmap
+    label: "SQLMap Exploitation"
+    detection_domains: [exploitation]
+    layers: [8]
+    target_types: [url, api]
+    gated: true
+    tools: [sqlmap]
+  - id: exploit_metasploit
+    label: "Metasploit Framework"
+    detection_domains: [exploitation]
+    layers: [8]
+    target_types: [ip, url, api]
+    gated: true
+    tools: [metasploit]
+  - id: exploit_hydra
+    label: "Hydra Brute Force"
+    detection_domains: [exploitation]
+    layers: [8]
+    target_types: [ip, url, api]
+    gated: true
+    tools: [hydra]
+  - id: exploit_ad
+    label: "AD Exploitation"
+    detection_domains: [ad_exploitation]
+    layers: [8]
+    target_types: [ip, domain]
+    gated: true
+    tools: [bloodhound, impacket]
+  - id: exploit_burp
+    label: "Burp Suite Automation"
+    detection_domains: [exploitation]
+    layers: [8]
+    target_types: [url, api]
+    gated: true
+    tools: [burpsuite]
+  - id: exploit_generic
+    label: "Generic Exploit Chain"
+    detection_domains: [exploitation]
+    layers: [8]
+    target_types: [ip, url, api]
+    gated: true
+
+  - id: post_exploit_privesc
+    label: "Privilege Escalation"
+    detection_domains: [privilege_escalation]
+    layers: [9]
+    target_types: [ip]
+    gated: true
+  - id: post_exploit_lateral
+    label: "Lateral Movement"
+    detection_domains: [lateral_movement]
+    layers: [9]
+    target_types: [ip, domain]
+    gated: true
+  - id: post_exploit_credential
+    label: "Credential Access"
+    detection_domains: [credential_access]
+    layers: [9]
+    target_types: [ip, domain]
+    gated: true
+  - id: post_exploit_exfiltration
+    label: "Data Exfiltration"
+    detection_domains: [exfiltration]
+    layers: [9]
+    target_types: [ip, domain]
+    gated: true
+
+  # Layers 10-12: Post-Engagement (no offensive capabilities here)
+  # Layer 10: Evidence & Reporting — handled by the core WRAITH report engine
+  # Layer 11: Remediation Validation — no redteam capability
+  # Layer 12: Program Governance — no redteam capability
+
+# Tool definitions (for --dry-run install checks)
+tools:
+  nmap:
+    description: "Network discovery and security scanning"
+    install_check: "nmap --version"
+    commands: {quick: "nmap -sV -sC -T4 {target} -oA {output}/nmap_quick", full: "nmap -sV -sC -p- {target} -oA {output}/nmap_full"}
+  sqlmap:
+    description: "Automatic SQL injection and database takeover"
+    install_check: "sqlmap --version"
+    commands: {standard: "sqlmap -u {target} --batch --dbs --stop=5", crawl: "sqlmap -u {target} --batch --crawl=3"}
+  masscan:
+    description: "High-speed port scanner"
+    install_check: "masscan --version"
+    commands: {quick: "masscan {target} --ports=1-65535 --rate=1000"}
+  hydra:
+    description: "Network login cracker"
+    install_check: "hydra -h"
+    commands: {ssh: "hydra -l root -P /usr/share/wordlists/rockyou.txt ssh://{target}"}
+  metasploit:
+    description: "Metasploit Framework"
+    install_check: "msfconsole --version"
+    commands: {console: "msfconsole -q -x 'search {target}'"}
+  burpsuite:
+    description: "Burp Suite Professional / Community"
+    install_check: "java -jar burpsuite.jar --version 2>/dev/null || echo 'burpsuite'"
+  bloodhound:
+    description: "Active Directory path discovery"
+    install_check: "bloodhound-python --version 2>/dev/null || bloodhound --version 2>/dev/null || echo 'bloodhound'"
+  impacket:
+    description: "Impacket suite for AD protocols"
+    install_check: "impacket-smbclient -h 2>/dev/null || impacket-getTGT -h 2>/dev/null || echo 'impacket'"
+  shodan:
+    description: "Shodan search engine"
+    install_check: "shodan --version 2>/dev/null || echo 'shodan'"
+  whois:
+    description: "WHOIS lookup"
+    install_check: "whois --version 2>/dev/null || echo 'whois'"
+  dig:
+    description: "DNS lookup utility"
+    install_check: "dig -v 2>/dev/null || echo 'dig'"
+
+# Target-type defaults (auto-selected capabilities per target type)
+target_type_defaults:
+  url:
+    auto_capabilities: [recon_passive, recon_active, web_sqli, web_xss, web_csrf, web_ssrf, web_path_traversal, web_file_upload, web_rce, web_info_disclosure, web_wordpress, api_idor, api_auth, api_jwt, api_graphql, api_fuzzing, agentic_prompt_injection, agentic_tool_misuse, agentic_excessive_agency]
+  api:
+    auto_capabilities: [recon_passive, recon_active, api_idor, api_auth, api_jwt, api_graphql, api_fuzzing, web_sqli, web_ssrf, web_path_traversal, agentic_prompt_injection, agentic_tool_misuse, agentic_excessive_agency]
+  ip:
+    auto_capabilities: [recon_passive, recon_active, network_scan, network_smtp, network_ssh, network_ad_enum, post_exploit_privesc, post_exploit_lateral, post_exploit_credential]
+  cidr:
+    auto_capabilities: [recon_passive, recon_active, network_scan, network_smtp, network_ssh, network_ad_enum, cloud_iam, cloud_gcp, post_exploit_privesc, post_exploit_lateral, post_exploit_credential]
+  domain:
+    auto_capabilities: [recon_passive, recon_active, web_sqli, web_xss, web_csrf, web_ssrf, web_path_traversal, web_info_disclosure, web_wordpress, network_ad_enum]
+  repo_path:
+    auto_capabilities: [sast_secrets, sast_deserialization, sast_supply_chain, sast_code_review, agentic_prompt_injection, agentic_tool_misuse, agentic_excessive_agency]
