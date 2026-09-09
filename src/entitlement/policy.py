@@ -8,6 +8,7 @@ See docs/entitlement-rbac-subscription.md sections 8, 9, and 11.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import datetime
 from enum import Enum
 
@@ -71,7 +72,7 @@ def _as_tier(value: Tier | str) -> Tier:
     return value if isinstance(value, Tier) else Tier(value)
 
 
-def capabilities_for(roles: list[Role | str], tier: Tier | str) -> list[str]:
+def capabilities_for(roles: Iterable[Role | str], tier: Tier | str) -> list[str]:
     """Compute the capability classes a principal holds (authority side).
 
     Returns the class values, sorted, ready to store in a grant. This is where
