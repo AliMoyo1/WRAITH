@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from orchestrator import Engagement, Scope, ScopeList
+from orchestrator import ApprovalToken, Engagement, Scope, ScopeList
 
 try:  # optional dependency; JSON always works
     import yaml  # type: ignore
@@ -22,6 +23,11 @@ except Exception:  # pragma: no cover - exercised only without PyYAML
 
 SIGNING_KEY_ENV = "WRAITH_SIGNING_KEY"
 RESULT_KEY_ENV = "WRAITH_RESULT_KEY"
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+# Durable record of spent approval-token nonces. Lives under the gitignored
+# results/ tree so single-use holds across separate CLI invocations.
+_CONSUMED_TOKENS_PATH = _REPO_ROOT / "results" / "consumed_tokens.json"
 
 
 def _load_mapping(path: Path) -> dict[str, Any]:
@@ -142,3 +148,48 @@ def result_key() -> bytes:
             "reading or exporting engagement results."
         )
     return raw.encode("utf-8")
+
+
+# ---- approval tokens: serialization + durable single-use tracking ----------
+
+
+def save_token(path: str | Path, token: ApprovalToken) -> None:
+    """Write a signed approval token to a file as a whole, verifiable object."""
+    _dump_mapping(Path(path), {"approval_token": token.to_dict()})
+
+
+def load_token(path: str | Path) -> ApprovalToken:
+    """Load a serialized approval token written by save_token."""
+    data = _load_mapping(Path(path))
+    node = data.get("approval_token", data)
+    return ApprovalToken.from_dict(node)
+
+
+def _read_consumed(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8-sig") or "{}")
+    except (OSError, ValueError):
+        return {}
+
+
+def is_token_consumed(nonce: str, path: str | Path | None = None) -> bool:
+    """Return True if this token nonce was already spent (durable, cross-process).
+
+    The kernel enforces single use within one process; this records spent nonces
+    on disk so a separate CLI invocation refuses a replayed token too.
+    """
+    data = _read_consumed(Path(path) if path else _CONSUMED_TOKENS_PATH)
+    return nonce in (data.get("consumed") or {})
+
+
+def mark_token_consumed(nonce: str, path: str | Path | None = None) -> None:
+    """Record a token nonce as spent so a later run refuses the replay."""
+    p = Path(path) if path else _CONSUMED_TOKENS_PATH
+    p.parent.mkdir(parents=True, exist_ok=True)
+    data = _read_consumed(p)
+    consumed = data.get("consumed") or {}
+    consumed[nonce] = datetime.now(UTC).isoformat()
+    data["consumed"] = consumed
+    p.write_text(json.dumps(data, indent=2), encoding="utf-8")

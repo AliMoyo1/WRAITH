@@ -433,3 +433,120 @@ class TestEndToEnd:
         )
         assert result.content
         assert "sqlmap" in result.content.lower()
+
+
+# ---------- Test token serialization and single-use ----------
+
+
+class TestTokenFlow:
+    """Serialize a whole token, feed it back in, and enforce single use."""
+
+    def test_token_roundtrip(self, tmp_path):
+        from config import load_token, save_token
+        from orchestrator import ApprovalToken, now_utc
+
+        key = b"round-trip-key"
+        tok = ApprovalToken(
+            engagement_id="e1",
+            action="exploit",
+            target="https://x.example.com",
+            expires_at=(now_utc() + timedelta(hours=1)).isoformat(),
+        ).sign(key)
+        path = tmp_path / "t.json"
+        save_token(path, tok)
+        loaded = load_token(path)
+        # A bare signature could not be re-verified; the whole token can.
+        assert loaded.nonce == tok.nonce
+        assert loaded.signature == tok.signature
+        assert loaded.verify(key) is True
+
+    def test_generator_accepts_deserialized_token(self, tmp_path, caps_path, orch):
+        from config import load_token, save_token
+        from orchestrator import ApprovalToken, now_utc
+        from redteam.capabilities import load_capabilities
+        from redteam.generator import GenerateRequest, MethodologyGenerator
+
+        orch_instance, key, eng = orch
+        tok = ApprovalToken(
+            engagement_id=eng.id,
+            action="exploit",
+            target="https://staging.example.com",
+            expires_at=(now_utc() + timedelta(hours=1)).isoformat(),
+        ).sign(key)
+        path = tmp_path / "t.json"
+        save_token(path, tok)
+        loaded = load_token(path)
+
+        caps = load_capabilities(caps_path)
+        gen = MethodologyGenerator(caps)
+        result = gen.generate(
+            GenerateRequest(
+                target="https://staging.example.com",
+                phase="exploit",
+                capabilities=["exploit_sqlmap"],
+                orchestrator=orch_instance,
+                approval_token=loaded,
+            )
+        )
+        assert "sqlmap" in result.content.lower()
+
+    def test_consumed_tracking(self, tmp_path):
+        from config import is_token_consumed, mark_token_consumed
+
+        path = tmp_path / "consumed.json"
+        assert is_token_consumed("nonce-abc", path) is False
+        mark_token_consumed("nonce-abc", path)
+        assert is_token_consumed("nonce-abc", path) is True
+        assert is_token_consumed("other", path) is False
+
+
+class TestTokenCLI:
+    """End-to-end: mint a token, generate once, then refuse the replay."""
+
+    def test_authorize_generate_and_replay(self, tmp_path, caps_path, monkeypatch):
+        from cli import wraith
+        from orchestrator import Engagement, Scope
+        from redteam.capabilities import load_capabilities
+
+        key_str = "cli-signing-key"
+        monkeypatch.setenv("WRAITH_SIGNING_KEY", key_str)
+        monkeypatch.setenv("WRAITH_RESULT_KEY", "cli-result-key")
+        monkeypatch.setattr(wraith, "_RESULTS_ROOT", tmp_path / "results")
+        monkeypatch.setattr(
+            wraith, "load_capabilities", lambda *a, **k: load_capabilities(caps_path)
+        )
+        monkeypatch.setattr(wraith.config, "_CONSUMED_TOKENS_PATH", tmp_path / "consumed.json")
+
+        scope = Scope(enabled=True)
+        scope.allow.urls.append("https://staging.example.com")
+        eng = Engagement(
+            id="cli-eng-1",
+            authorized_by="tester",
+            approved_at=datetime.now(UTC).isoformat(),
+            expires_at=(datetime.now(UTC) + timedelta(hours=8)).isoformat(),
+            scope=scope,
+        ).sign(key_str.encode("utf-8"))
+        monkeypatch.setattr(wraith.config, "load_engagement", lambda *a, **k: eng)
+
+        tok = tmp_path / "token.json"
+
+        rc = wraith.main(
+            [
+                "redteam", "authorize",
+                "--target", "https://staging.example.com",
+                "--action", "exploit",
+                "--out", str(tok),
+            ]
+        )
+        assert rc == 0
+        assert tok.exists()
+
+        gen_argv = [
+            "redteam", "generate",
+            "--phase", "exploit",
+            "--target", "https://staging.example.com",
+            "--capabilities", "exploit_sqlmap",
+            "--token", str(tok),
+        ]
+        assert wraith.main(gen_argv) == 0  # allowed once
+        assert wraith.main(gen_argv) == 2  # replay refused (durable single-use)
