@@ -15,7 +15,6 @@ from pathlib import Path
 
 import pytest
 
-
 # ---------- Fixtures ----------
 
 
@@ -194,9 +193,9 @@ class TestGeneratorAuthorization:
         """Exploit content is allowed with a valid approval token."""
         from datetime import timedelta
 
+        from orchestrator.engagement import ApprovalToken, now_utc
         from redteam.capabilities import load_capabilities
         from redteam.generator import GenerateRequest, MethodologyGenerator
-        from orchestrator.engagement import ApprovalToken, now_utc
 
         caps = load_capabilities(caps_path)
         orch_instance, key, eng = orch
@@ -224,9 +223,9 @@ class TestGeneratorAuthorization:
         """Token bound to a different target must be refused."""
         from datetime import timedelta
 
+        from orchestrator.engagement import ApprovalToken, now_utc
         from redteam.capabilities import load_capabilities
         from redteam.generator import GenerateRequest, MethodologyGenerator
-        from orchestrator.engagement import ApprovalToken, now_utc
 
         caps = load_capabilities(caps_path)
         orch_instance, key, eng = orch
@@ -250,9 +249,9 @@ class TestGeneratorAuthorization:
 
     def test_exploit_refused_without_engagement(self, caps_path, orch):
         """Without a started engagement, exploit is refused."""
+        from orchestrator.policy import Orchestrator
         from redteam.capabilities import load_capabilities
         from redteam.generator import GenerateRequest, MethodologyGenerator
-        from orchestrator.policy import Orchestrator
 
         caps = load_capabilities(caps_path)
         orch_instance, key, eng = orch
@@ -287,6 +286,36 @@ class TestGeneratorAuthorization:
                     capabilities=["post_exploit_privesc"],
                     orchestrator=orch_instance,
                     approval_token=None,
+                )
+            )
+
+    def test_refused_without_orchestrator(self, caps_path):
+        """Fail closed: no orchestrator means no authorization, for any phase."""
+        from redteam.capabilities import load_capabilities
+        from redteam.generator import GenerateRequest, MethodologyGenerator
+
+        caps = load_capabilities(caps_path)
+        gen = MethodologyGenerator(caps)
+
+        # Gated phase is refused with no orchestrator.
+        with pytest.raises(PermissionError):
+            gen.generate(
+                GenerateRequest(
+                    target="https://staging.example.com",
+                    phase="exploit",
+                    capabilities=["exploit_sqlmap"],
+                    orchestrator=None,
+                )
+            )
+
+        # Non-gated phase is also refused: recon/probe still need an engagement.
+        with pytest.raises(PermissionError):
+            gen.generate(
+                GenerateRequest(
+                    target="https://staging.example.com",
+                    phase="probe",
+                    capabilities=["web_sqli"],
+                    orchestrator=None,
                 )
             )
 
@@ -378,9 +407,9 @@ class TestEndToEnd:
         """Full authorized exploit after getting token."""
         from datetime import timedelta
 
+        from orchestrator.engagement import ApprovalToken, now_utc
         from redteam.capabilities import load_capabilities
         from redteam.generator import GenerateRequest, MethodologyGenerator
-        from orchestrator.engagement import ApprovalToken, now_utc
 
         caps = load_capabilities(caps_path)
         orch_instance, key, eng = orch
