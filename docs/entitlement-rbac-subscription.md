@@ -306,15 +306,18 @@ Resolved 2026-09-09:
 - Execution: SERVER-SIDE. The hosted server runs the engines behind the API; the
   client is thin. Enforcement and execution are server-side, with offensive
   actions isolated (for example via CubeSandbox on Linux plus KVM).
+- Revocation: SHORT TTL to start. Grants are short-lived and simply expire; a
+  revocation list is deferred to a later phase.
+- Roles: CONFIRMED. Viewer, Analyst, Operator, Admin, keeping the
+  separation-of-duties stance (Admin is not automatically Operator).
+- Tiers: CONFIRMED. Community, Pro, Enterprise. Pricing is a separate product
+  decision.
 
 Still to confirm before build:
 
-1. Revocation: short TTL only to start, or a revocation list from day one?
-2. Roles: confirm the four roles and the separation-of-duties stance (Admin is
-   not automatically Operator).
-3. Tiers: confirm the three tiers and their names; pricing is a product decision.
-4. Default-deny surface: which endpoints, if any, respond with no grant at all
+1. Default-deny surface: which endpoints, if any, respond with no grant at all
    (for example a health check, or a capability listing that shows only names).
+   This is a phase 2 (authority service) concern, not a phase 1 blocker.
 
 ## 17. Phased rollout
 
