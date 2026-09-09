@@ -55,3 +55,14 @@ class RefreshToken(Base):
     issued_at: Mapped[str] = mapped_column(String(40))
     expires_at: Mapped[str] = mapped_column(String(40))
     revoked: Mapped[bool] = mapped_column(default=False)
+
+
+class MfaCredential(Base):
+    __tablename__ = "mfa_credential"
+
+    principal_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("principal.id"), primary_key=True
+    )
+    type: Mapped[str] = mapped_column(String(16), default="totp")
+    secret_encrypted: Mapped[str] = mapped_column(String(255))
+    confirmed_at: Mapped[str | None] = mapped_column(String(40), nullable=True, default=None)

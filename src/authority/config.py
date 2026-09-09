@@ -6,6 +6,7 @@ import os
 
 DB_URL_ENV = "WRAITH_DB_URL"
 ENTITLEMENT_KEY_ENV = "WRAITH_ENTITLEMENT_KEY"
+MFA_KEY_ENV = "WRAITH_MFA_KEY"
 _DEFAULT_DB_URL = "sqlite:///./authority.db"
 
 
@@ -33,3 +34,18 @@ def entitlement_key() -> bytes:
             "entitlement signing key to issue and verify grants."
         )
     return raw.encode("utf-8")
+
+
+def mfa_key() -> bytes:
+    """Return the Fernet key used to encrypt MFA secrets and sign challenges.
+
+    Must be a valid Fernet key (32 url-safe base64 bytes). No default (fail
+    closed); distinct from the entitlement, signing, and result keys.
+    """
+    raw = os.environ.get(MFA_KEY_ENV)
+    if not raw or not raw.strip():
+        raise RuntimeError(
+            f"{MFA_KEY_ENV} is not set. The authority requires a Fernet key to "
+            "protect MFA secrets."
+        )
+    return raw.strip().encode("utf-8")
