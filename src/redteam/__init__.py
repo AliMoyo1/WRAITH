@@ -1,7 +1,7 @@
-"""WRAITH Red Team Annex — authorized methodology generator.
+"""WRAITH Red Team Annex: authorized methodology generator.
 
 This package produces target-specific methodology checklists and command
-references for authorized engagements. It does NOT execute anything — it
+references for authorized engagements. It does NOT execute anything: it
 generates text that a human operator follows.
 
 Every output path is gated by the kernel's authorization model:
@@ -22,8 +22,8 @@ from .capabilities import (
     load_capabilities,
     resolve_for_target,
 )
-from .generator import MethodologyGenerator, GenerateRequest, GenerateResult
 from .checklist import ChecklistGenerator, PreFlightChecklist
+from .generator import GenerateRequest, GenerateResult, MethodologyGenerator
 
 __all__ = [
     "Capabilities",

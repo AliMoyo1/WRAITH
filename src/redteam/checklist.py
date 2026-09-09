@@ -20,7 +20,7 @@ class PreFlightChecklist:
 
 _CHECKLIST_TPL = """
 ╔══════════════════════════════════════════════════════════════════════════╗
-║  WRAITH Red Team Annex — Pre-Flight Checklist                         ║
+║  WRAITH Red Team Annex: Pre-Flight Checklist                          ║
 ║  Phase: {phase}                                                         ║
 ╚══════════════════════════════════════════════════════════════════════════╝
 
@@ -42,7 +42,7 @@ Authorized by: {authorized_by}
 2. TECHNICAL SAFEGUARDS
 {sep}
 
-[  ] 2.1 Impact minimized — no destructive operations
+[  ] 2.1 Impact minimized: no destructive operations
 [  ] 2.2 Findings will be reported to the engagement owner
 [  ] 2.3 No data exfiltration beyond proof-of-concept samples
 

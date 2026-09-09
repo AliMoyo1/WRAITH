@@ -31,8 +31,6 @@ from adapters import ADAPTERS, AdapterRequest  # noqa: E402
 from obs import get_logger, log_event  # noqa: E402
 from orchestrator import Engagement, Orchestrator, Scope, Track, now_utc  # noqa: E402
 from orchestrator.scope import classify_target  # noqa: E402
-from store import ResultStore, ResultStoreError  # noqa: E402
-from supervisor import Job, Supervisor  # noqa: E402
 from redteam import (  # noqa: E402
     ChecklistGenerator,
     GenerateRequest,
@@ -40,6 +38,8 @@ from redteam import (  # noqa: E402
     load_capabilities,
     resolve_for_target,
 )
+from store import ResultStore, ResultStoreError  # noqa: E402
+from supervisor import Job, Supervisor  # noqa: E402
 
 __version__ = "2.1"
 
@@ -407,7 +407,7 @@ def _rt_status(args) -> int:
         ("Exploit (layer 8)", [8], "exploit"),
         ("Post-Exploit (layer 9)", [9], "post_exploit"),
     ]:
-        seg = [c for c in available if any(l in layer_range for l in c.layers)]
+        seg = [c for c in available if any(la in layer_range for la in c.layers)]
         if not seg:
             continue
         print(f"  [{phase_label.upper()}] {layer_name}")
@@ -443,26 +443,17 @@ def _rt_generate(args) -> int:
     orch = Orchestrator(key)
     orch.start_engagement(eng)
 
-    token = None
     if phase in ("exploit", "post_exploit"):
-        eng_path = getattr(args, "engagement", None) or _DEFAULT_ENGAGE
-        tok_sig = getattr(args, "token", None)
-        if not eng_path or not tok_sig:
-            print("  refused: exploit/post_exploit requires --engagement and --token flags.")
-            return 2
-        try:
-            eng_data = config.load_engagement(eng_path)
-            from orchestrator.engagement import ApprovalToken
-
-            token = ApprovalToken(
-                engagement_id=eng_data.id,
-                action=phase,
-                target=target,
-                signature=tok_sig,
-            )
-        except Exception as e:
-            print(f"  refused: cannot load approval token: {e}")
-            return 2
+        # Keep the CLI fail-closed for gated phases. The library API enforces
+        # the single-use approval token, but CLI token minting and
+        # serialization land in a follow-up. Until then, refuse rather than
+        # emit gated content from a token that cannot yet be verified.
+        print(
+            "  refused: exploit/post_exploit require a single-use approval "
+            "token; CLI token minting lands in a follow-up. Use the library "
+            "API with a signed ApprovalToken for now."
+        )
+        return 2
 
     cap_ids = None
     raw = getattr(args, "capabilities", None)
@@ -471,14 +462,12 @@ def _rt_generate(args) -> int:
     if not cap_ids:
         available = resolve_for_target(caps, target_type)
         cap_ids = [c.id for c in available if not c.gated]
-        if phase in ("exploit", "post_exploit") and token:
-            cap_ids += [c.id for c in available if c.gated]
 
     gen = MethodologyGenerator(caps)
     request = GenerateRequest(
         target=target, target_type=target_type, phase=phase,
-        capabilities=cap_ids, engagement_id=orch.engagement.id,
-        approval_token=token, orchestrator=orch,
+        capabilities=cap_ids, engagement_id=eng.id,
+        approval_token=None, orchestrator=orch,
     )
 
     try:
@@ -489,7 +478,7 @@ def _rt_generate(args) -> int:
 
     try:
         rk = config.result_key()
-        store = ResultStore(_RESULTS_ROOT, orch.engagement.id, rk, actor="redteam:generate")
+        store = ResultStore(_RESULTS_ROOT, eng.id, rk, actor="redteam:generate")
         finding = {
             "finding_id": f"redteam-{phase}-{target[:32]}",
             "type": f"redteam_{phase}_methodology",
@@ -509,7 +498,7 @@ def _rt_generate(args) -> int:
         if w != "Authorization: ***":
             print(f"  [{w}]")
     print(f"\n  Finding ID: {result.finding_id or '(not persisted)'}")
-    print(f"  Engagement: {orch.engagement.id}")
+    print(f"  Engagement: {eng.id}")
     return 0
 
 
@@ -521,9 +510,13 @@ def _rt_checklist(args) -> int:
         print(f"  refused: {e}")
         return 2
 
-    eng = config.load_engagement(_DEFAULT_ENGAGE)
-    if not getattr(eng, "open", True):
-        print("  refused: engagement is closed or missing.")
+    from orchestrator.policy import Orchestrator
+
+    try:
+        eng = config.load_engagement(_DEFAULT_ENGAGE)
+        Orchestrator(key).start_engagement(eng)
+    except Exception as e:
+        print(f"  refused: {e}")
         return 2
 
     gen = ChecklistGenerator()
@@ -531,7 +524,7 @@ def _rt_checklist(args) -> int:
         target=getattr(args, "target", "") or "",
         phase=getattr(args, "rt_phase", "recon"),
         engagement_id=eng.id,
-        authorized_by=getattr(eng, "authorized_by", "Operator"),
+        authorized_by=eng.authorized_by,
     )
 
     try:
@@ -600,7 +593,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_engine.add_argument("--llm", action="store_true", help="enable LLM augmentation (default off)")
     p_engine.set_defaults(func=cmd_engine)
 
-    p_rt = sub.add_parser("redteam", help="Red Team Annex — methodology generator with guardrails")
+    p_rt = sub.add_parser("redteam", help="Red Team Annex: methodology generator with guardrails")
     p_rt.add_argument("rt_action", choices=["status", "generate", "checklist"])
     p_rt.add_argument("--target", help="target URL/IP/domain/path")
     p_rt.add_argument("--phase", choices=["recon", "probe", "exploit", "post_exploit"], default="probe",
