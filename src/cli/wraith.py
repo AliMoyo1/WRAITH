@@ -29,7 +29,14 @@ if str(_SRC) not in sys.path:
 import config  # noqa: E402
 from adapters import ADAPTERS, AdapterRequest  # noqa: E402
 from obs import get_logger, log_event  # noqa: E402
-from orchestrator import Engagement, Orchestrator, Scope, Track, now_utc  # noqa: E402
+from orchestrator import (  # noqa: E402
+    ApprovalToken,
+    Engagement,
+    Orchestrator,
+    Scope,
+    Track,
+    now_utc,
+)
 from orchestrator.scope import classify_target  # noqa: E402
 from redteam import (  # noqa: E402
     ChecklistGenerator,
@@ -380,7 +387,9 @@ def cmd_redteam(args) -> int:
         return _rt_generate(args)
     elif args.rt_action == "checklist":
         return _rt_checklist(args)
-    print("Subcommands: status, generate, checklist")
+    elif args.rt_action == "authorize":
+        return _rt_authorize(args)
+    print("Subcommands: status, generate, checklist, authorize")
     return 2
 
 
@@ -443,17 +452,23 @@ def _rt_generate(args) -> int:
     orch = Orchestrator(key)
     orch.start_engagement(eng)
 
+    token = None
     if phase in ("exploit", "post_exploit"):
-        # Keep the CLI fail-closed for gated phases. The library API enforces
-        # the single-use approval token, but CLI token minting and
-        # serialization land in a follow-up. Until then, refuse rather than
-        # emit gated content from a token that cannot yet be verified.
-        print(
-            "  refused: exploit/post_exploit require a single-use approval "
-            "token; CLI token minting lands in a follow-up. Use the library "
-            "API with a signed ApprovalToken for now."
-        )
-        return 2
+        tok_path = getattr(args, "token", None)
+        if not tok_path:
+            print(
+                "  refused: exploit/post_exploit require --token <file>; "
+                "mint one with 'wraith redteam authorize'."
+            )
+            return 2
+        try:
+            token = config.load_token(tok_path)
+        except Exception as e:
+            print(f"  refused: cannot load approval token: {e}")
+            return 2
+        if config.is_token_consumed(token.nonce):
+            print("  refused: approval token already used (replay refused).")
+            return 2
 
     cap_ids = None
     raw = getattr(args, "capabilities", None)
@@ -462,12 +477,14 @@ def _rt_generate(args) -> int:
     if not cap_ids:
         available = resolve_for_target(caps, target_type)
         cap_ids = [c.id for c in available if not c.gated]
+        if token is not None:
+            cap_ids += [c.id for c in available if c.gated]
 
     gen = MethodologyGenerator(caps)
     request = GenerateRequest(
         target=target, target_type=target_type, phase=phase,
         capabilities=cap_ids, engagement_id=eng.id,
-        approval_token=None, orchestrator=orch,
+        approval_token=token, orchestrator=orch,
     )
 
     try:
@@ -475,6 +492,11 @@ def _rt_generate(args) -> int:
     except PermissionError as e:
         print(f"  refused: {e}")
         return 2
+
+    # The token was validated and consumed in-process by the kernel; persist the
+    # nonce so a separate invocation refuses a replay of the same token.
+    if token is not None:
+        config.mark_token_consumed(token.nonce)
 
     try:
         rk = config.result_key()
@@ -544,6 +566,57 @@ def _rt_checklist(args) -> int:
     print(checklist.content)
     return 0
 
+
+def _rt_authorize(args) -> int:
+    """Mint a single-use approval token for a gated phase (exploit/post_exploit).
+
+    Requires the operator signing key and an open, valid engagement whose scope
+    includes the target. Writes a whole, verifiable token to a file that
+    'redteam generate --token <file>' consumes exactly once.
+    """
+    try:
+        key = config.signing_key()
+    except RuntimeError as e:
+        print(f"  refused: {e}")
+        return 2
+
+    target = getattr(args, "target", "") or ""
+    if not target:
+        print("  refused: --target is required")
+        return 2
+    action = getattr(args, "action", "exploit")
+
+    try:
+        eng = config.load_engagement(getattr(args, "engagement", None) or _DEFAULT_ENGAGE)
+        Orchestrator(key).start_engagement(eng)
+    except Exception as e:
+        print(f"  refused: {e}")
+        return 2
+
+    if not eng.scope.allows(target):
+        print(f"  refused: {target} is not in the authorized scope")
+        return 2
+
+    hours = getattr(args, "hours", 1.0)
+    token = ApprovalToken(
+        engagement_id=eng.id,
+        action=action,
+        target=target,
+        expires_at=(now_utc() + timedelta(hours=hours)).isoformat(),
+    ).sign(key)
+
+    out = Path(getattr(args, "out", None) or (_RESULTS_ROOT / "approval_token.json"))
+    config.save_token(out, token)
+
+    print(_REDTEAM_BANNER)
+    print(f"  Approval token minted: action={action} target={target}")
+    print(f"  Engagement: {eng.id}")
+    print(f"  Expires: {token.expires_at}")
+    print(f"  Saved: {out}")
+    print(f"  Next: wraith redteam generate --phase {action} --target {target} --token {out}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="wraith", description="Full-spectrum offensive security platform")
     parser.add_argument("--version", action="version", version=f"WRAITH v{__version__}")
@@ -594,13 +667,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_engine.set_defaults(func=cmd_engine)
 
     p_rt = sub.add_parser("redteam", help="Red Team Annex: methodology generator with guardrails")
-    p_rt.add_argument("rt_action", choices=["status", "generate", "checklist"])
+    p_rt.add_argument("rt_action", choices=["status", "generate", "checklist", "authorize"])
     p_rt.add_argument("--target", help="target URL/IP/domain/path")
     p_rt.add_argument("--phase", choices=["recon", "probe", "exploit", "post_exploit"], default="probe",
                       help="methodology phase for generate")
     p_rt.add_argument("--capabilities", help="comma-separated capability ids (default: auto-select)")
-    p_rt.add_argument("--engagement", help="engagement file path (for exploit token)")
-    p_rt.add_argument("--token", help="single-use approval token signature (for exploit/post_exploit)")
+    p_rt.add_argument("--engagement", help="engagement file path (default config/engagement.json)")
+    p_rt.add_argument("--token", help="path to a serialized approval token file (for exploit/post_exploit)")
+    p_rt.add_argument("--action", choices=["exploit", "post_exploit"], default="exploit",
+                      help="action to authorize (for the authorize subcommand)")
+    p_rt.add_argument("--hours", type=float, default=1.0, help="approval token lifetime in hours")
+    p_rt.add_argument("--out", help="output path for the minted approval token")
     p_rt.add_argument("--rt-phase", choices=["recon", "probe"], default="recon",
                       help="phase for checklist")
     p_rt.set_defaults(func=cmd_redteam)

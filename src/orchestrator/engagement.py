@@ -139,3 +139,24 @@ class ApprovalToken:
         if expires is None:
             return True
         return expires <= (at or now_utc())
+
+    def to_dict(self) -> dict:
+        """Serialize to a plain dict, including the nonce and signature.
+
+        A token must be transported whole: verification recomputes the MAC over
+        every signed field (the nonce and expiry included), so a bare signature
+        cannot be reconstructed or checked on its own.
+        """
+        return {**self._payload(), "signature": self.signature}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> ApprovalToken:
+        """Rebuild a token from ``to_dict`` output, preserving the signed nonce."""
+        return cls(
+            engagement_id=data["engagement_id"],
+            action=data["action"],
+            target=data["target"],
+            expires_at=data["expires_at"],
+            nonce=data.get("nonce", ""),
+            signature=data.get("signature"),
+        )
