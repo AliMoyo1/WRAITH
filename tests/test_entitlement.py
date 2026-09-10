@@ -14,16 +14,18 @@ from entitlement import (
     Role,
     Tier,
     capabilities_for,
+    generate_keypair,
     now_utc,
     require_entitlement,
 )
 
-KEY = b"entitlement-test-key"
+PRIV, PUB = generate_keypair()
+KEY = PUB  # verifiers hold only the public key; grants are signed with PRIV
 
 
 def _grant(
     capabilities: list[str],
-    key: bytes = KEY,
+    key: bytes = PRIV,
     tenant: str = "t1",
     principal: str = "p1",
     roles: list[str] | None = None,

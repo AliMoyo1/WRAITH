@@ -35,10 +35,10 @@ engines server-side in isolation, isolates results per tenant, and can be killed
 | Results | local encrypted `ResultStore` | per-tenant encrypted store, retrievable by API |
 | Kill-switch | a local `.killed` flag file | per-tenant and global control-plane operation |
 
-## 4. Key architectural decisions (with recommendations)
+## 4. Key architectural decisions
 
-These are the forks to settle before building. Recommendations are noted; confirm
-or change them.
+DECIDED 2026-09-10: all three recommendations below are adopted: a separate Runner
+service, asymmetric Ed25519 grants, and tenant-scoped server engagements.
 
 ### 4.1 A separate Runner service, not an extension of the authority
 
@@ -190,15 +190,16 @@ Known risks to manage:
 
 ## 14. Open questions
 
-1. Confirm a separate Runner service (recommended) versus extending the authority.
-2. Confirm moving `CapabilityGrant` to Ed25519 (recommended). This is a prerequisite
-   and is the first sub-phase.
-3. Queue and worker technology (a managed queue versus a self-hosted one).
-4. Do engagements live in the Runner, or in a shared control-plane service the
+Resolved 2026-09-10: a separate Runner service; asymmetric Ed25519 grants
+(sub-phase 1); tenant-scoped server engagements.
+
+Still to confirm:
+1. Queue and worker technology (a managed queue versus a self-hosted one).
+2. Do engagements live in the Runner, or in a shared control-plane service the
    authority and Runner both use?
-5. Offensive execution in v1, or defensive-only server-side first with offensive
+3. Offensive execution in v1, or defensive-only server-side first with offensive
    behind a later gate?
-6. Result retention and export policy per tenant.
+4. Result retention and export policy per tenant.
 
 ## 15. Sub-rollout (phase 4 as several green PRs)
 
