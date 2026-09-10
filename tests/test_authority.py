@@ -206,3 +206,65 @@ def test_refresh_rejects_garbage(app_client):
     client, factory = app_client
     _seed(factory, tier="pro", roles=("analyst",))
     assert client.post("/v1/auth/refresh", json={"refresh_token": "nope"}).status_code == 401
+
+
+def _operator_grant(client):
+    # Enroll and confirm MFA, then log in and verify to obtain an Operator grant.
+    secret = client.post("/v1/mfa/enroll", json=_CREDS).json()["secret"]
+    client.post("/v1/mfa/confirm", json={**_CREDS, "code": _totp_now(secret)})
+    challenge = client.post("/v1/auth/login", json=_CREDS).json()["challenge"]
+    return client.post(
+        "/v1/auth/mfa/verify", json={"challenge": challenge, "code": _totp_now(secret)}
+    ).json()["grant"]
+
+
+def test_api_key_create_exchange_and_revoke(app_client):
+    client, factory = app_client
+    _seed(factory, tier="pro", roles=("analyst",))
+    grant = client.post("/v1/auth/login", json=_CREDS).json()["grant"]
+    hdr = {"Authorization": f"Bearer {grant}"}
+
+    created = client.post("/v1/api-keys", json={"name": "ci"}, headers=hdr)
+    assert created.status_code == 200
+    raw = created.json()["api_key"]
+    key_id = created.json()["id"]
+
+    listed = client.get("/v1/api-keys", headers=hdr).json()["api_keys"]
+    assert any(k["id"] == key_id and k["name"] == "ci" for k in listed)
+
+    token = client.post("/v1/auth/token", json={"api_key": raw})
+    assert token.status_code == 200
+    exchanged = {"Authorization": f"Bearer {token.json()['grant']}"}
+    assert client.get("/v1/me", headers=exchanged).status_code == 200
+
+    assert client.delete(f"/v1/api-keys/{key_id}", headers=hdr).status_code == 200
+    assert client.post("/v1/auth/token", json={"api_key": raw}).status_code == 401
+
+
+def test_api_key_grant_capped_below_operator(app_client):
+    client, factory = app_client
+    _seed(factory, tier="enterprise", roles=("operator",))
+    op_grant = _operator_grant(client)
+    hdr = {"Authorization": f"Bearer {op_grant}"}
+    assert "redteam_exploit" in client.get("/v1/me", headers=hdr).json()["capabilities"]
+
+    raw = client.post("/v1/api-keys", json={"name": "bot"}, headers=hdr).json()["api_key"]
+    key_grant = client.post("/v1/auth/token", json={"api_key": raw}).json()["grant"]
+    key_caps = client.get(
+        "/v1/me", headers={"Authorization": f"Bearer {key_grant}"}
+    ).json()["capabilities"]
+    assert "redteam_probe" in key_caps  # non-elevated classes remain
+    assert "redteam_exploit" not in key_caps  # capped below Operator
+    assert "redteam_post_exploit" not in key_caps
+
+
+def test_auth_token_rejects_bad_key(app_client):
+    client, factory = app_client
+    _seed(factory, tier="pro", roles=("analyst",))
+    assert client.post("/v1/auth/token", json={"api_key": "wak_nope"}).status_code == 401
+
+
+def test_api_keys_require_auth(app_client):
+    client, _ = app_client
+    assert client.post("/v1/api-keys", json={"name": "x"}).status_code == 401
+    assert client.get("/v1/api-keys").status_code == 401

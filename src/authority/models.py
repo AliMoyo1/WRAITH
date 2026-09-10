@@ -66,3 +66,16 @@ class MfaCredential(Base):
     type: Mapped[str] = mapped_column(String(16), default="totp")
     secret_encrypted: Mapped[str] = mapped_column(String(255))
     confirmed_at: Mapped[str | None] = mapped_column(String(40), nullable=True, default=None)
+
+
+class ApiKey(Base):
+    __tablename__ = "api_key"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenant.id"), index=True)
+    principal_id: Mapped[str] = mapped_column(String(64), ForeignKey("principal.id"), index=True)
+    name: Mapped[str] = mapped_column(String(128))
+    key_hash: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    created_at: Mapped[str] = mapped_column(String(40))
+    last_used_at: Mapped[str | None] = mapped_column(String(40), nullable=True, default=None)
+    revoked_at: Mapped[str | None] = mapped_column(String(40), nullable=True, default=None)

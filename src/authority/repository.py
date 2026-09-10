@@ -14,7 +14,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .models import MfaCredential, Principal, PrincipalRole, RefreshToken, Tenant
+from .models import ApiKey, MfaCredential, Principal, PrincipalRole, RefreshToken, Tenant
 from .security import hash_password
 
 
@@ -126,4 +126,52 @@ def get_refresh_token(session: Session, token_hash: str) -> RefreshToken | None:
 
 def revoke_refresh_token(session: Session, token: RefreshToken) -> None:
     token.revoked = True
+    session.commit()
+
+
+def create_api_key(
+    session: Session, tenant_id: str, principal_id: str, name: str, key_hash: str
+) -> ApiKey:
+    record = ApiKey(
+        id=uuid.uuid4().hex,
+        tenant_id=tenant_id,
+        principal_id=principal_id,
+        name=name,
+        key_hash=key_hash,
+        created_at=datetime.now(UTC).isoformat(),
+    )
+    session.add(record)
+    session.commit()
+    return record
+
+
+def get_api_key(session: Session, key_hash: str) -> ApiKey | None:
+    return session.scalars(select(ApiKey).where(ApiKey.key_hash == key_hash)).first()
+
+
+def list_api_keys(session: Session, tenant_id: str, principal_id: str) -> list[ApiKey]:
+    stmt = select(ApiKey).where(
+        ApiKey.tenant_id == tenant_id, ApiKey.principal_id == principal_id
+    )
+    return list(session.scalars(stmt))
+
+
+def get_api_key_by_id(
+    session: Session, tenant_id: str, principal_id: str, key_id: str
+) -> ApiKey | None:
+    stmt = select(ApiKey).where(
+        ApiKey.id == key_id,
+        ApiKey.tenant_id == tenant_id,
+        ApiKey.principal_id == principal_id,
+    )
+    return session.scalars(stmt).first()
+
+
+def revoke_api_key(session: Session, record: ApiKey) -> None:
+    record.revoked_at = datetime.now(UTC).isoformat()
+    session.commit()
+
+
+def touch_api_key(session: Session, record: ApiKey) -> None:
+    record.last_used_at = datetime.now(UTC).isoformat()
     session.commit()

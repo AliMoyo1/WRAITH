@@ -28,7 +28,15 @@ from .config import (
     mfa_key as _default_mfa_key,
 )
 from .db import create_all, make_engine, make_session_factory
-from .grants import decode_grant, encode_grant, hash_refresh, issue_grant, new_refresh_token
+from .grants import (
+    decode_grant,
+    encode_grant,
+    hash_api_key,
+    hash_refresh,
+    issue_grant,
+    new_api_key,
+    new_refresh_token,
+)
 from .mfa import (
     decrypt_secret,
     encrypt_secret,
@@ -42,6 +50,9 @@ from .models import Principal, Tenant
 from .security import verify_password
 
 _MFA_ROLES = frozenset({"operator", "admin"})
+# API-key grants are capped below the elevated classes: automation cannot trigger
+# exploitation or tenant administration without an interactive, MFA-backed login.
+_API_KEY_EXCLUDED = frozenset({"redteam_exploit", "redteam_post_exploit", "admin"})
 
 
 class LoginRequest(BaseModel):
@@ -70,6 +81,14 @@ class MfaVerifyRequest(BaseModel):
 
 class RefreshRequest(BaseModel):
     refresh_token: str
+
+
+class ApiKeyCreateRequest(BaseModel):
+    name: str
+
+
+class TokenRequest(BaseModel):
+    api_key: str
 
 
 def _mfa_required(roles: list[str]) -> bool:
@@ -223,6 +242,74 @@ def create_app(
             # Rotate: revoke the presented token; _issue_login_response mints a fresh one.
             repository.revoke_refresh_token(session, stored)
             return _issue_login_response(session, key, principal, tenant, roles)
+
+    @app.post("/v1/api-keys")
+    def api_key_create(
+        body: ApiKeyCreateRequest, authorization: str = Header(default="")
+    ) -> dict[str, object]:
+        grant = _grant_from_header(authorization, key)
+        raw, key_hash = new_api_key()
+        with session_factory() as session:
+            record = repository.create_api_key(
+                session, grant.tenant_id, grant.principal_id, body.name, key_hash
+            )
+            payload: dict[str, object] = {
+                "id": record.id,
+                "name": record.name,
+                "api_key": raw,
+                "created_at": record.created_at,
+            }
+        return payload
+
+    @app.get("/v1/api-keys")
+    def api_key_list(authorization: str = Header(default="")) -> dict[str, object]:
+        grant = _grant_from_header(authorization, key)
+        with session_factory() as session:
+            records = repository.list_api_keys(session, grant.tenant_id, grant.principal_id)
+            keys = [
+                {
+                    "id": r.id,
+                    "name": r.name,
+                    "created_at": r.created_at,
+                    "last_used_at": r.last_used_at,
+                    "revoked_at": r.revoked_at,
+                }
+                for r in records
+            ]
+        return {"api_keys": keys}
+
+    @app.delete("/v1/api-keys/{key_id}")
+    def api_key_revoke(key_id: str, authorization: str = Header(default="")) -> dict[str, str]:
+        grant = _grant_from_header(authorization, key)
+        with session_factory() as session:
+            record = repository.get_api_key_by_id(
+                session, grant.tenant_id, grant.principal_id, key_id
+            )
+            if record is None:
+                raise HTTPException(status_code=404, detail="api key not found")
+            repository.revoke_api_key(session, record)
+        return {"status": "revoked"}
+
+    @app.post("/v1/auth/token")
+    def auth_token(body: TokenRequest) -> dict[str, object]:
+        with session_factory() as session:
+            record = repository.get_api_key(session, hash_api_key(body.api_key))
+            if record is None or record.revoked_at is not None:
+                raise HTTPException(status_code=401, detail="invalid api key")
+            principal = repository.get_principal_by_id(session, record.principal_id)
+            tenant = repository.get_tenant(session, record.tenant_id)
+            if principal is None or principal.status != "active" or tenant is None:
+                raise HTTPException(status_code=401, detail="principal not active")
+            repository.touch_api_key(session, record)
+            roles = repository.get_roles(session, principal.id)
+            grant = issue_grant(
+                key, tenant.id, principal.id, roles, tenant.tier, exclude=_API_KEY_EXCLUDED
+            )
+            payload: dict[str, object] = {
+                "grant": encode_grant(grant),
+                "expires_at": grant.expires_at,
+            }
+            return payload
 
     @app.get("/v1/me")
     def me(authorization: str = Header(default="")) -> dict[str, object]:
