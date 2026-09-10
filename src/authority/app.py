@@ -9,7 +9,7 @@ grant. A non-elevated principal without MFA still receives a grant directly.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
@@ -38,6 +38,7 @@ from .grants import (
     new_refresh_token,
 )
 from .mfa import (
+    CHALLENGE_TTL_SECONDS,
     decrypt_secret,
     encrypt_secret,
     generate_secret,
@@ -53,6 +54,10 @@ _MFA_ROLES = frozenset({"operator", "admin"})
 # API-key grants are capped below the elevated classes: automation cannot trigger
 # exploitation or tenant administration without an interactive, MFA-backed login.
 _API_KEY_EXCLUDED = frozenset({"redteam_exploit", "redteam_post_exploit", "admin"})
+# Capability marker carried only by interactive-login grants (never by a grant
+# minted from an API key), so an API-key-derived grant cannot mint or revoke keys.
+_API_KEY_MANAGE = "api_key_manage"
+_INTERACTIVE_EXTRA = frozenset({_API_KEY_MANAGE})
 _VALID_ROLES = frozenset({"viewer", "analyst", "operator", "admin"})
 _VALID_TIERS = frozenset({"community", "pro", "enterprise"})
 _VALID_STATUS = frozenset({"active", "disabled"})
@@ -68,6 +73,9 @@ class MfaEnrollRequest(BaseModel):
     tenant: str
     email: str
     password: str
+    # Required only to re-enroll over an already-confirmed factor: a current TOTP
+    # code from the existing authenticator. First-time enrollment leaves it unset.
+    code: str | None = None
 
 
 class MfaConfirmRequest(BaseModel):
@@ -83,6 +91,10 @@ class MfaVerifyRequest(BaseModel):
 
 
 class RefreshRequest(BaseModel):
+    refresh_token: str
+
+
+class LogoutRequest(BaseModel):
     refresh_token: str
 
 
@@ -134,6 +146,13 @@ def _is_past(iso: str) -> bool:
     return moment <= datetime.now(UTC)
 
 
+def _require_active_tenant(tenant: Tenant) -> None:
+    # A tenant can be disabled for billing or offboarding; when it is, none of its
+    # principals may authenticate or use an existing grant. Checked on every path.
+    if tenant.status != "active":
+        raise HTTPException(status_code=403, detail="tenant disabled")
+
+
 def _authenticate(
     session: Session, tenant_slug: str, email: str, password: str
 ) -> tuple[Principal, Tenant]:
@@ -151,13 +170,17 @@ def _authenticate(
     ):
         # One message for every failure mode: no account enumeration.
         raise HTTPException(status_code=401, detail="invalid credentials")
+    # Only revealed after the credentials check, so it is not a tenant oracle.
+    _require_active_tenant(tenant)
     return principal, tenant
 
 
 def _issue_login_response(
     session: Session, key: bytes, principal: Principal, tenant: Tenant, roles: list[str]
 ) -> dict[str, object]:
-    grant = issue_grant(key, tenant.id, principal.id, roles, tenant.tier)
+    # Interactive logins carry the api_key_manage marker; grants minted from an API
+    # key (issued via /v1/auth/token) do not, so a key cannot mint or revoke keys.
+    grant = issue_grant(key, tenant.id, principal.id, roles, tenant.tier, extra=_INTERACTIVE_EXTRA)
     raw_refresh, refresh_hash = new_refresh_token()
     repository.store_refresh_token(session, principal.id, refresh_hash)
     payload: dict[str, object] = {
@@ -217,13 +240,22 @@ def create_app(
     @app.post("/v1/auth/mfa/verify")
     def mfa_verify(body: MfaVerifyRequest) -> dict[str, object]:
         data = read_challenge(mkey, body.challenge)
-        if data is None:
+        jti = data.get("jti") if data is not None else None
+        if data is None or not jti:
             raise HTTPException(status_code=401, detail="invalid or expired challenge")
         with session_factory() as session:
+            # Single-use: redeem the challenge before checking the code, so a captured
+            # challenge cannot be replayed to mint more than one session.
+            expires_at = (
+                datetime.now(UTC) + timedelta(seconds=CHALLENGE_TTL_SECONDS)
+            ).isoformat()
+            if not repository.consume_challenge(session, jti, expires_at):
+                raise HTTPException(status_code=401, detail="challenge already used")
             tenant = repository.get_tenant(session, data["tenant_id"])
             principal = repository.get_principal(session, data["tenant_id"], data["principal_id"])
             if tenant is None or principal is None or principal.status != "active":
                 raise HTTPException(status_code=401, detail="principal not active")
+            _require_active_tenant(tenant)
             cred = repository.get_mfa(session, principal.id)
             if cred is None or cred.confirmed_at is None:
                 raise HTTPException(status_code=401, detail="mfa not enrolled")
@@ -236,6 +268,19 @@ def create_app(
     def mfa_enroll(body: MfaEnrollRequest) -> dict[str, str]:
         with session_factory() as session:
             principal, tenant = _authenticate(session, body.tenant, body.email, body.password)
+            existing = repository.get_mfa(session, principal.id)
+            if existing is not None and existing.confirmed_at is not None:
+                # Replacing an already-confirmed factor requires proof of the current
+                # factor: a valid code from the existing authenticator. Without this a
+                # stolen password alone could swap in an attacker's authenticator and
+                # defeat MFA entirely (account takeover). First-time enrollment, where
+                # no confirmed factor exists yet, remains a password-only bootstrap.
+                current = decrypt_secret(mkey, existing.secret_encrypted)
+                if not body.code or not verify_code(current, body.code):
+                    raise HTTPException(
+                        status_code=403,
+                        detail="re-enrollment requires a current mfa code",
+                    )
             secret = generate_secret()
             repository.upsert_mfa_secret(session, principal.id, encrypt_secret(mkey, secret))
             uri = provisioning_uri(secret, f"{principal.email} ({tenant.slug})")
@@ -267,16 +312,32 @@ def create_app(
             )
             if principal is None or principal.status != "active" or tenant is None:
                 raise HTTPException(status_code=401, detail="principal not active")
+            _require_active_tenant(tenant)
             roles = repository.get_roles(session, principal.id)
-            # Rotate: revoke the presented token; _issue_login_response mints a fresh one.
-            repository.revoke_refresh_token(session, stored)
+            # Rotate atomically: only the caller that flips the token from active to
+            # revoked mints a new session, so a concurrent reuse of the same token
+            # cannot both pass the check above and both succeed.
+            if not repository.revoke_refresh_if_active(session, stored.id):
+                raise HTTPException(status_code=401, detail="refresh token already rotated")
             return _issue_login_response(session, key, principal, tenant, roles)
+
+    @app.post("/v1/auth/logout")
+    def logout(body: LogoutRequest) -> dict[str, str]:
+        # Server-side revocation of the presented refresh token so logout is not
+        # merely local. Idempotent and always 200: an unknown or already-revoked
+        # token is not distinguished, so this is not a token oracle.
+        with session_factory() as session:
+            stored = repository.get_refresh_token(session, hash_refresh(body.refresh_token))
+            if stored is not None and not stored.revoked:
+                repository.revoke_refresh_if_active(session, stored.id)
+        return {"status": "logged out"}
 
     @app.post("/v1/api-keys")
     def api_key_create(
         body: ApiKeyCreateRequest, authorization: str = Header(default="")
     ) -> dict[str, object]:
         grant = _grant_from_header(authorization, key)
+        _require_class(grant, _API_KEY_MANAGE)  # deny grants minted from an API key
         raw, key_hash = new_api_key()
         with session_factory() as session:
             record = repository.create_api_key(
@@ -310,6 +371,7 @@ def create_app(
     @app.delete("/v1/api-keys/{key_id}")
     def api_key_revoke(key_id: str, authorization: str = Header(default="")) -> dict[str, str]:
         grant = _grant_from_header(authorization, key)
+        _require_class(grant, _API_KEY_MANAGE)  # deny grants minted from an API key
         with session_factory() as session:
             record = repository.get_api_key_by_id(
                 session, grant.tenant_id, grant.principal_id, key_id
@@ -329,6 +391,7 @@ def create_app(
             tenant = repository.get_tenant(session, record.tenant_id)
             if principal is None or principal.status != "active" or tenant is None:
                 raise HTTPException(status_code=401, detail="principal not active")
+            _require_active_tenant(tenant)
             repository.touch_api_key(session, record)
             roles = repository.get_roles(session, principal.id)
             grant = issue_grant(
@@ -424,6 +487,10 @@ def create_app(
             principal = repository.get_principal(session, grant.tenant_id, grant.principal_id)
             if principal is None or principal.status != "active":
                 raise HTTPException(status_code=401, detail="principal not active")
+            tenant = repository.get_tenant(session, grant.tenant_id)
+            if tenant is None:
+                raise HTTPException(status_code=401, detail="principal not active")
+            _require_active_tenant(tenant)
         return {
             "principal_id": grant.principal_id,
             "tenant_id": grant.tenant_id,

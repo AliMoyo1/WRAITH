@@ -92,3 +92,16 @@ def test_load_session_missing_is_none(tmp_path):
     from client import load_session
 
     assert load_session(tmp_path / "nope.json") is None
+
+
+def test_client_logout_revokes(authed):
+    from client import AuthError
+
+    client, factory, _ = authed
+    _seed(factory, "pro", ("analyst",))
+    session = client.login("acme", "op@acme.example", "s3cret")
+
+    client.logout(session["refresh_token"])
+    # After server-side logout the refresh token is revoked.
+    with pytest.raises(AuthError):
+        client.refresh(session["refresh_token"])

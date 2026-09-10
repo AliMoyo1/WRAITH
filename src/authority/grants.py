@@ -27,13 +27,16 @@ def issue_grant(
     tier: str,
     ttl_minutes: int = DEFAULT_GRANT_TTL_MINUTES,
     exclude: frozenset[str] = frozenset(),
+    extra: frozenset[str] = frozenset(),
 ) -> CapabilityGrant:
     """Compute the capability set for (roles, tier) and sign a short-lived grant.
 
     ``exclude`` drops capability classes from the computed set, used to cap the
-    classes an API-key grant may carry.
+    classes an API-key grant may carry. ``extra`` adds issuance-context capability
+    classes that do not come from the role-by-tier matrix, used to mark an
+    interactive login so that API-key-derived grants cannot manage API keys.
     """
-    capabilities = [c for c in capabilities_for(roles, tier) if c not in exclude]
+    capabilities = sorted((set(capabilities_for(roles, tier)) - exclude) | extra)
     return CapabilityGrant(
         tenant_id=tenant_id,
         principal_id=principal_id,

@@ -58,6 +58,9 @@ _DEFAULT_ENGAGE = _CONFIG_DIR / "engagement.json"
 _KILL_FLAG = _CONFIG_DIR / ".killed"
 _RESULTS_ROOT = _REPO_ROOT / "results"
 _ENGINE_DIRS = {"skillspector": "repos/SkillSpector", "strix": "repos/strix"}
+# Engine -> analysis track used by the execution gate, so a single engine run is
+# authorized under the track that matches the engine (parity with scan).
+_TRACK_FOR_ENGINE = {"skillspector": Track.SAST_AGENTIC, "strix": Track.WEB_API}
 
 
 def _scope_path(args) -> Path:
@@ -88,10 +91,14 @@ def _adapters_for(track: str, target: str) -> list[str]:
     return selected
 
 
-def _authorize_scan(args) -> tuple[int | None, Engagement | None]:
-    """Gate the scan. With an engagement, use the kernel; otherwise a scope pre-flight.
+def _authorize_scan(
+    args, track: Track = Track.SAST_AGENTIC
+) -> tuple[int | None, Engagement | None]:
+    """Gate execution. With an engagement, use the kernel; otherwise a scope pre-flight.
 
-    Returns (early_exit_code_or_None, engagement_or_None).
+    Returns (early_exit_code_or_None, engagement_or_None). ``track`` selects the
+    analysis track for the kernel authorization so a caller (for example a single
+    engine run) can gate under the track that matches the engine.
     """
     engage_path = Path(getattr(args, "engagement_file", None) or _DEFAULT_ENGAGE)
     if engage_path.exists():
@@ -104,7 +111,7 @@ def _authorize_scan(args) -> tuple[int | None, Engagement | None]:
         orch = Orchestrator(key)
         try:
             orch.start_engagement(engagement)
-            orch.require_authorization(Track.SAST_AGENTIC, args.target)  # analysis gate: engagement + scope
+            orch.require_authorization(track, args.target)  # analysis gate: engagement + scope
         except PermissionError as exc:
             print(f"refused: {exc}")
             return 2, None
@@ -351,6 +358,17 @@ def cmd_engine(args) -> int:
     if not args.target:
         print("target required for run")
         return 2
+    if _KILL_FLAG.exists():
+        print("kill-switch engaged; run 'wraith kill --reset' to clear")
+        return 3
+    # Parity with scan: no engine runs without the kill-switch clear, the target in
+    # scope, and (when present) an open, signed engagement. Closes the path where
+    # `engine run` reached the adapter with no authorization at all.
+    code, _engagement = _authorize_scan(
+        args, track=_TRACK_FOR_ENGINE.get(args.name, Track.SAST_AGENTIC)
+    )
+    if code is not None:
+        return code
     request = AdapterRequest(target=args.target, timeout_seconds=args.timeout, no_llm=not args.llm)
     result = adapter.run(request)
     coverage = result.coverage.get("status")
@@ -692,6 +710,17 @@ def _auth_whoami(args) -> int:
 
 
 def _auth_logout(args) -> int:
+    from client import AuthClient, load_session
+
+    session = load_session(_SESSION_PATH)
+    token = session.get("refresh_token") if session else None
+    if token:
+        # Revoke server-side so the refresh token cannot be reused, then clear local.
+        client = AuthClient(_authority_url(args))
+        try:
+            client.logout(token)
+        finally:
+            client.close()
     if _SESSION_PATH.exists():
         _SESSION_PATH.unlink()
         print("  logged out; cached session removed")
@@ -747,6 +776,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_engine.add_argument("--store", help="engagement id to store OK findings under")
     p_engine.add_argument("--timeout", type=float, default=300.0, help="engine timeout in seconds")
     p_engine.add_argument("--llm", action="store_true", help="enable LLM augmentation (default off)")
+    p_engine.add_argument("--scope", help="path to scope file (default config/scope.yaml)")
+    p_engine.add_argument("--engagement-file", dest="engagement_file", help="engagement record file")
     p_engine.set_defaults(func=cmd_engine)
 
     p_rt = sub.add_parser("redteam", help="Red Team Annex: methodology generator with guardrails")

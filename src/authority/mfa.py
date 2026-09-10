@@ -9,6 +9,7 @@ protects both.
 from __future__ import annotations
 
 import json
+import uuid
 
 import pyotp
 from cryptography.fernet import Fernet, InvalidToken
@@ -39,7 +40,12 @@ def decrypt_secret(key: bytes, token: str) -> str:
 
 
 def make_challenge(key: bytes, principal_id: str, tenant_id: str) -> str:
-    payload = json.dumps({"principal_id": principal_id, "tenant_id": tenant_id})
+    # The jti makes the challenge single-use: it is recorded when redeemed at
+    # /v1/auth/mfa/verify and a second presentation of the same challenge is
+    # refused, so a captured challenge cannot mint more than one session.
+    payload = json.dumps(
+        {"principal_id": principal_id, "tenant_id": tenant_id, "jti": uuid.uuid4().hex}
+    )
     return Fernet(key).encrypt(payload.encode("utf-8")).decode("ascii")
 
 
