@@ -5,7 +5,9 @@ from __future__ import annotations
 import pytest
 from cryptography.fernet import Fernet
 
-KEY = b"authority-test-entitlement-key"
+from entitlement import generate_keypair
+
+PRIV = generate_keypair()[0]
 MFA_KEY = Fernet.generate_key()
 
 
@@ -19,7 +21,7 @@ def app_client(tmp_path):
     engine = make_engine(f"sqlite:///{tmp_path / 'authority.db'}")
     create_all(engine)
     factory = make_session_factory(engine)
-    app = create_app(session_factory=factory, entitlement_key=KEY, mfa_key=MFA_KEY)
+    app = create_app(session_factory=factory, entitlement_private_key=PRIV, mfa_key=MFA_KEY)
     return TestClient(app), factory
 
 

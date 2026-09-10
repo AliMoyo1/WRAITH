@@ -2,8 +2,12 @@
 
 A CapabilityGrant states which capability classes a principal (within a tenant)
 may use. The authority computes that set from the principal's roles and the
-tenant tier (see ``policy.capabilities_for``), then signs the grant. Verification
-is deterministic standard-library HMAC, mirroring ``orchestrator.engagement``.
+tenant tier (see ``policy.capabilities_for``), then signs the grant.
+
+Grants are signed with Ed25519: the authority holds the private key and signs;
+every verifier (the authority itself, and the Runner) holds only the public key.
+The signing secret therefore lives in exactly one place. See
+docs/server-side-execution-scope.md section 4.
 
 This is orthogonal to the engagement gate: a grant NEVER authorizes a target,
 only a capability class. See docs/entitlement-rbac-subscription.md.
@@ -11,12 +15,17 @@ only a capability class. See docs/entitlement-rbac-subscription.md.
 
 from __future__ import annotations
 
-import hashlib
-import hmac
+import base64
 import json
 import secrets
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+    Ed25519PrivateKey,
+    Ed25519PublicKey,
+)
 
 
 def now_utc() -> datetime:
@@ -35,9 +44,19 @@ def _parse_iso(value: str) -> datetime | None:
     return dt
 
 
-def _sign(key: bytes, payload: dict) -> str:
-    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hmac.new(key, raw, hashlib.sha256).hexdigest()
+def _canonical(payload: dict) -> bytes:
+    return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def generate_keypair() -> tuple[bytes, bytes]:
+    """Return (private_key, public_key) as raw 32-byte Ed25519 keys."""
+    sk = Ed25519PrivateKey.generate()
+    return sk.private_bytes_raw(), sk.public_key().public_bytes_raw()
+
+
+def public_from_private(private_key: bytes) -> bytes:
+    """Derive the raw public key from a raw Ed25519 private key."""
+    return Ed25519PrivateKey.from_private_bytes(private_key).public_key().public_bytes_raw()
 
 
 @dataclass
@@ -74,15 +93,21 @@ class CapabilityGrant:
             "nonce": self.nonce,
         }
 
-    def sign(self, key: bytes) -> CapabilityGrant:
-        self.signature = _sign(key, self._payload())
+    def sign(self, private_key: bytes) -> CapabilityGrant:
+        signer = Ed25519PrivateKey.from_private_bytes(private_key)
+        raw = signer.sign(_canonical(self._payload()))
+        self.signature = base64.urlsafe_b64encode(raw).decode("ascii")
         return self
 
-    def verify(self, key: bytes) -> bool:
+    def verify(self, public_key: bytes) -> bool:
         if not self.signature:
             return False
-        expected = _sign(key, self._payload())
-        return hmac.compare_digest(expected, self.signature)
+        try:
+            verifier = Ed25519PublicKey.from_public_bytes(public_key)
+            verifier.verify(base64.urlsafe_b64decode(self.signature), _canonical(self._payload()))
+            return True
+        except (InvalidSignature, ValueError):
+            return False
 
     def is_expired(self, at: datetime | None = None) -> bool:
         expires = _parse_iso(self.expires_at)

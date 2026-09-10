@@ -14,16 +14,19 @@ from entitlement import (
     Role,
     Tier,
     capabilities_for,
+    generate_keypair,
     now_utc,
+    public_from_private,
     require_entitlement,
 )
 
-KEY = b"entitlement-test-key"
+PRIV, PUB = generate_keypair()
+KEY = PUB  # verifiers hold only the public key; grants are signed with PRIV
 
 
 def _grant(
     capabilities: list[str],
-    key: bytes = KEY,
+    key: bytes = PRIV,
     tenant: str = "t1",
     principal: str = "p1",
     roles: list[str] | None = None,
@@ -74,6 +77,16 @@ class TestGrant:
         g = _grant(["control_plane_read"])
         assert g.allows("control_plane_read") is True
         assert g.allows("redteam_exploit") is False
+
+    def test_other_keypair_does_not_verify(self):
+        _other_priv, other_pub = generate_keypair()
+        g = _grant(["control_plane_read"])  # signed with PRIV
+        assert g.verify(other_pub) is False  # a different keypair's public key is rejected
+        assert g.verify(PUB) is True
+
+    def test_public_from_private_matches(self):
+        priv, pub = generate_keypair()
+        assert public_from_private(priv) == pub
 
 
 class TestMatrix:

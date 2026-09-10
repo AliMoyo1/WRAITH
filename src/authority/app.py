@@ -15,14 +15,14 @@ from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, sessionmaker
 
-from entitlement import CapabilityGrant
+from entitlement import CapabilityGrant, public_from_private
 
 from . import repository
 from .config import (
     database_url,
 )
 from .config import (
-    entitlement_key as _default_entitlement_key,
+    entitlement_private_key as _default_entitlement_private_key,
 )
 from .config import (
     mfa_key as _default_mfa_key,
@@ -206,14 +206,22 @@ def _grant_from_header(authorization: str, key: bytes) -> CapabilityGrant:
 
 def create_app(
     session_factory: sessionmaker[Session] | None = None,
-    entitlement_key: bytes | None = None,
+    entitlement_private_key: bytes | None = None,
     mfa_key: bytes | None = None,
 ) -> FastAPI:
     if session_factory is None:
         engine = make_engine(database_url())
         create_all(engine)
         session_factory = make_session_factory(engine)
-    key = entitlement_key if entitlement_key is not None else _default_entitlement_key()
+    # The authority holds only the Ed25519 private key; it signs grants with it and
+    # derives the public key to verify the bearer grants it is presented. A verifier
+    # (for example a future Runner) holds only the public key.
+    priv = (
+        entitlement_private_key
+        if entitlement_private_key is not None
+        else _default_entitlement_private_key()
+    )
+    pub = public_from_private(priv)
     mkey = mfa_key if mfa_key is not None else _default_mfa_key()
 
     app = FastAPI(title="WRAITH Authority", version="0.3.0")
@@ -235,7 +243,7 @@ def create_app(
             if confirmed:
                 challenge = make_challenge(mkey, principal.id, tenant.id)
                 return {"mfa_required": True, "challenge": challenge}
-            return _issue_login_response(session, key, principal, tenant, roles)
+            return _issue_login_response(session, priv, principal, tenant, roles)
 
     @app.post("/v1/auth/mfa/verify")
     def mfa_verify(body: MfaVerifyRequest) -> dict[str, object]:
@@ -262,7 +270,7 @@ def create_app(
             if not verify_code(decrypt_secret(mkey, cred.secret_encrypted), body.code):
                 raise HTTPException(status_code=401, detail="invalid code")
             roles = repository.get_roles(session, principal.id)
-            return _issue_login_response(session, key, principal, tenant, roles)
+            return _issue_login_response(session, priv, principal, tenant, roles)
 
     @app.post("/v1/mfa/enroll")
     def mfa_enroll(body: MfaEnrollRequest) -> dict[str, str]:
@@ -319,7 +327,7 @@ def create_app(
             # cannot both pass the check above and both succeed.
             if not repository.revoke_refresh_if_active(session, stored.id):
                 raise HTTPException(status_code=401, detail="refresh token already rotated")
-            return _issue_login_response(session, key, principal, tenant, roles)
+            return _issue_login_response(session, priv, principal, tenant, roles)
 
     @app.post("/v1/auth/logout")
     def logout(body: LogoutRequest) -> dict[str, str]:
@@ -336,7 +344,7 @@ def create_app(
     def api_key_create(
         body: ApiKeyCreateRequest, authorization: str = Header(default="")
     ) -> dict[str, object]:
-        grant = _grant_from_header(authorization, key)
+        grant = _grant_from_header(authorization, pub)
         _require_class(grant, _API_KEY_MANAGE)  # deny grants minted from an API key
         raw, key_hash = new_api_key()
         with session_factory() as session:
@@ -353,7 +361,7 @@ def create_app(
 
     @app.get("/v1/api-keys")
     def api_key_list(authorization: str = Header(default="")) -> dict[str, object]:
-        grant = _grant_from_header(authorization, key)
+        grant = _grant_from_header(authorization, pub)
         with session_factory() as session:
             records = repository.list_api_keys(session, grant.tenant_id, grant.principal_id)
             keys = [
@@ -370,7 +378,7 @@ def create_app(
 
     @app.delete("/v1/api-keys/{key_id}")
     def api_key_revoke(key_id: str, authorization: str = Header(default="")) -> dict[str, str]:
-        grant = _grant_from_header(authorization, key)
+        grant = _grant_from_header(authorization, pub)
         _require_class(grant, _API_KEY_MANAGE)  # deny grants minted from an API key
         with session_factory() as session:
             record = repository.get_api_key_by_id(
@@ -395,7 +403,7 @@ def create_app(
             repository.touch_api_key(session, record)
             roles = repository.get_roles(session, principal.id)
             grant = issue_grant(
-                key, tenant.id, principal.id, roles, tenant.tier, exclude=_API_KEY_EXCLUDED
+                priv, tenant.id, principal.id, roles, tenant.tier, exclude=_API_KEY_EXCLUDED
             )
             payload: dict[str, object] = {
                 "grant": encode_grant(grant),
@@ -407,7 +415,7 @@ def create_app(
     def admin_create_principal(
         body: AdminPrincipalCreate, authorization: str = Header(default="")
     ) -> dict[str, object]:
-        grant = _grant_from_header(authorization, key)
+        grant = _grant_from_header(authorization, pub)
         _require_class(grant, "admin")
         _validate_roles(body.roles)
         with session_factory() as session:
@@ -425,7 +433,7 @@ def create_app(
 
     @app.get("/v1/admin/principals")
     def admin_list_principals(authorization: str = Header(default="")) -> dict[str, object]:
-        grant = _grant_from_header(authorization, key)
+        grant = _grant_from_header(authorization, pub)
         _require_class(grant, "admin")
         with session_factory() as session:
             rows = [
@@ -443,7 +451,7 @@ def create_app(
     def admin_update_principal(
         principal_id: str, body: AdminPrincipalUpdate, authorization: str = Header(default="")
     ) -> dict[str, object]:
-        grant = _grant_from_header(authorization, key)
+        grant = _grant_from_header(authorization, pub)
         _require_class(grant, "admin")
         with session_factory() as session:
             principal = repository.get_principal(session, grant.tenant_id, principal_id)
@@ -468,7 +476,7 @@ def create_app(
     def admin_update_tenant(
         body: AdminTenantUpdate, authorization: str = Header(default="")
     ) -> dict[str, object]:
-        grant = _grant_from_header(authorization, key)
+        grant = _grant_from_header(authorization, pub)
         _require_class(grant, "admin")
         if body.tier not in _VALID_TIERS:
             raise HTTPException(status_code=400, detail="invalid tier")
@@ -482,7 +490,7 @@ def create_app(
 
     @app.get("/v1/me")
     def me(authorization: str = Header(default="")) -> dict[str, object]:
-        grant = _grant_from_header(authorization, key)
+        grant = _grant_from_header(authorization, pub)
         with session_factory() as session:
             principal = repository.get_principal(session, grant.tenant_id, grant.principal_id)
             if principal is None or principal.status != "active":

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import base64
 import os
 
 DB_URL_ENV = "WRAITH_DB_URL"
-ENTITLEMENT_KEY_ENV = "WRAITH_ENTITLEMENT_KEY"
+ENTITLEMENT_PRIVATE_KEY_ENV = "WRAITH_ENTITLEMENT_PRIVATE_KEY"
 MFA_KEY_ENV = "WRAITH_MFA_KEY"
 _DEFAULT_DB_URL = "sqlite:///./authority.db"
 
@@ -20,20 +21,20 @@ def database_url() -> str:
     return raw.strip() if raw and raw.strip() else _DEFAULT_DB_URL
 
 
-def entitlement_key() -> bytes:
-    """Return the entitlement signing key from the environment, or raise.
+def entitlement_private_key() -> bytes:
+    """Return the Ed25519 grant-signing private key from the environment, or raise.
 
-    The authority is the only holder of this key: it signs grants with it and
-    verifies incoming grants against it. Distinct from the CLI signing and result
-    keys, and there is no default (fail closed).
+    The authority is the only holder of the private key: it signs grants with it
+    and derives the public key to verify its own bearer grants. Stored base64-url
+    encoded (32 raw bytes). No default (fail closed).
     """
-    raw = os.environ.get(ENTITLEMENT_KEY_ENV)
+    raw = os.environ.get(ENTITLEMENT_PRIVATE_KEY_ENV)
     if not raw or not raw.strip():
         raise RuntimeError(
-            f"{ENTITLEMENT_KEY_ENV} is not set. The authority requires an "
-            "entitlement signing key to issue and verify grants."
+            f"{ENTITLEMENT_PRIVATE_KEY_ENV} is not set. The authority requires an "
+            "Ed25519 private key to sign grants."
         )
-    return raw.encode("utf-8")
+    return base64.urlsafe_b64decode(raw.strip())
 
 
 def mfa_key() -> bytes:
