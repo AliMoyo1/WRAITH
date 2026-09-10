@@ -157,3 +157,52 @@ def test_mfa_verify_rejects_wrong_code(app_client):
     challenge = client.post("/v1/auth/login", json=_CREDS).json()["challenge"]
     resp = client.post("/v1/auth/mfa/verify", json={"challenge": challenge, "code": "000000"})
     assert resp.status_code == 401
+
+
+def test_refresh_issues_new_grant_and_rotates(app_client):
+    client, factory = app_client
+    _seed(factory, tier="pro", roles=("analyst",))
+    login = client.post("/v1/auth/login", json=_CREDS).json()
+
+    r1 = client.post("/v1/auth/refresh", json={"refresh_token": login["refresh_token"]})
+    assert r1.status_code == 200
+    new = r1.json()
+    assert new["grant"] and new["refresh_token"] != login["refresh_token"]
+    assert client.get("/v1/me", headers={"Authorization": f"Bearer {new['grant']}"}).status_code == 200
+
+    # The presented token is now revoked; the rotated one still works.
+    old = client.post("/v1/auth/refresh", json={"refresh_token": login["refresh_token"]})
+    assert old.status_code == 401
+    again = client.post("/v1/auth/refresh", json={"refresh_token": new["refresh_token"]})
+    assert again.status_code == 200
+
+
+def test_refresh_reresolves_tier(app_client):
+    from authority.repository import get_tenant_by_slug
+
+    client, factory = app_client
+    _seed(factory, tier="community", roles=("analyst",))
+    login = client.post("/v1/auth/login", json=_CREDS).json()
+    caps1 = client.get(
+        "/v1/me", headers={"Authorization": f"Bearer {login['grant']}"}
+    ).json()["capabilities"]
+    assert "redteam_recon" not in caps1  # community analyst has no red team classes
+
+    with factory() as s:
+        tenant = get_tenant_by_slug(s, "acme")
+        tenant.tier = "pro"
+        s.commit()
+
+    refreshed = client.post(
+        "/v1/auth/refresh", json={"refresh_token": login["refresh_token"]}
+    ).json()
+    caps2 = client.get(
+        "/v1/me", headers={"Authorization": f"Bearer {refreshed['grant']}"}
+    ).json()["capabilities"]
+    assert "redteam_recon" in caps2  # re-resolved at the upgraded tier
+
+
+def test_refresh_rejects_garbage(app_client):
+    client, factory = app_client
+    _seed(factory, tier="pro", roles=("analyst",))
+    assert client.post("/v1/auth/refresh", json={"refresh_token": "nope"}).status_code == 401

@@ -113,3 +113,17 @@ def confirm_mfa(session: Session, principal_id: str) -> None:
     if cred is not None:
         cred.confirmed_at = datetime.now(UTC).isoformat()
         session.commit()
+
+
+def get_principal_by_id(session: Session, principal_id: str) -> Principal | None:
+    return session.get(Principal, principal_id)
+
+
+def get_refresh_token(session: Session, token_hash: str) -> RefreshToken | None:
+    stmt = select(RefreshToken).where(RefreshToken.token_hash == token_hash)
+    return session.scalars(stmt).first()
+
+
+def revoke_refresh_token(session: Session, token: RefreshToken) -> None:
+    token.revoked = True
+    session.commit()

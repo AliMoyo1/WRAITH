@@ -9,6 +9,8 @@ grant. A non-elevated principal without MFA still receives a grant directly.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, sessionmaker
@@ -26,7 +28,7 @@ from .config import (
     mfa_key as _default_mfa_key,
 )
 from .db import create_all, make_engine, make_session_factory
-from .grants import decode_grant, encode_grant, issue_grant, new_refresh_token
+from .grants import decode_grant, encode_grant, hash_refresh, issue_grant, new_refresh_token
 from .mfa import (
     decrypt_secret,
     encrypt_secret,
@@ -66,8 +68,22 @@ class MfaVerifyRequest(BaseModel):
     code: str
 
 
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
+
 def _mfa_required(roles: list[str]) -> bool:
     return any(role in _MFA_ROLES for role in roles)
+
+
+def _is_past(iso: str) -> bool:
+    try:
+        moment = datetime.fromisoformat(iso)
+    except ValueError:
+        return True
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=UTC)
+    return moment <= datetime.now(UTC)
 
 
 def _authenticate(
@@ -188,6 +204,25 @@ def create_app(
                 raise HTTPException(status_code=401, detail="invalid code")
             repository.confirm_mfa(session, principal.id)
         return {"status": "confirmed"}
+
+    @app.post("/v1/auth/refresh")
+    def refresh(body: RefreshRequest) -> dict[str, object]:
+        with session_factory() as session:
+            stored = repository.get_refresh_token(session, hash_refresh(body.refresh_token))
+            if stored is None or stored.revoked or _is_past(stored.expires_at):
+                raise HTTPException(status_code=401, detail="invalid refresh token")
+            principal = repository.get_principal_by_id(session, stored.principal_id)
+            tenant = (
+                repository.get_tenant(session, principal.tenant_id)
+                if principal is not None
+                else None
+            )
+            if principal is None or principal.status != "active" or tenant is None:
+                raise HTTPException(status_code=401, detail="principal not active")
+            roles = repository.get_roles(session, principal.id)
+            # Rotate: revoke the presented token; _issue_login_response mints a fresh one.
+            repository.revoke_refresh_token(session, stored)
+            return _issue_login_response(session, key, principal, tenant, roles)
 
     @app.get("/v1/me")
     def me(authorization: str = Header(default="")) -> dict[str, object]:

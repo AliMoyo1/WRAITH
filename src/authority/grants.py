@@ -52,7 +52,12 @@ def decode_grant(token: str) -> CapabilityGrant:
     return CapabilityGrant.from_dict(json.loads(raw))
 
 
+def hash_refresh(raw: str) -> str:
+    """Hash a refresh token for storage and lookup (never store the raw value)."""
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
 def new_refresh_token() -> tuple[str, str]:
     """Return (raw_token, sha256_hex). Store only the hash; hand out the raw once."""
     raw = secrets.token_urlsafe(32)
-    return raw, hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    return raw, hash_refresh(raw)
