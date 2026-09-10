@@ -148,6 +148,24 @@ def test_purge_removes_results(tmp_path):
     assert not s.dir.exists()
 
 
+def test_engagement_id_traversal_refused(tmp_path):
+    # A traversal in the engagement id must not create storage outside the root
+    # (and purge() would otherwise rmtree the escaped directory).
+    for bad in ["../escaped", "a/b", "..", "x/../../y", "with space"]:
+        with pytest.raises(ResultStoreError):
+            ResultStore(tmp_path / "results", bad, MASTER, actor="t")
+
+
+def test_finding_id_unsafe_refused_no_silent_collision(tmp_path):
+    s = _store(tmp_path)
+    # "a/b" is rejected rather than silently stripped to "ab": distinct ids can
+    # never collapse onto one file and overwrite evidence.
+    with pytest.raises(ResultStoreError):
+        s.put_finding({"finding_id": "a/b"})
+    s.put_finding({"finding_id": "ab"})
+    assert s.list_findings() == ["ab"]
+
+
 def test_cli_report_without_key_returns_2(monkeypatch):
     from cli import wraith
     monkeypatch.delenv("WRAITH_RESULT_KEY", raising=False)

@@ -337,3 +337,106 @@ def test_admin_created_principal_can_login(app_client):
     )
     assert login.status_code == 200
     assert login.json()["grant"]
+
+
+def test_revoke_refresh_if_active_is_one_shot(session):
+    # The atomic conditional revoke succeeds exactly once; a concurrent second
+    # rotation of the same token loses and is denied. (Audit High: refresh race.)
+    from authority.repository import (
+        create_principal,
+        create_tenant,
+        revoke_refresh_if_active,
+        store_refresh_token,
+    )
+
+    tenant = create_tenant(session, "Acme", slug="acme")
+    principal = create_principal(session, tenant.id, "op@acme.example", "pw", roles=["analyst"])
+    token = store_refresh_token(session, principal.id, "hash-1")
+
+    assert revoke_refresh_if_active(session, token.id) is True
+    assert revoke_refresh_if_active(session, token.id) is False
+
+
+def test_disabled_tenant_blocks_auth(app_client):
+    # Tenant.status is enforced: a disabled tenant cannot log in, and an already
+    # issued grant and refresh token stop working. (Audit High: disabled tenants.)
+    from authority.repository import get_tenant_by_slug
+
+    client, factory = app_client
+    _seed(factory, tier="pro", roles=("analyst",))
+    login = client.post("/v1/auth/login", json=_CREDS).json()
+    grant, refresh = login["grant"], login["refresh_token"]
+
+    with factory() as s:
+        get_tenant_by_slug(s, "acme").status = "disabled"
+        s.commit()
+
+    assert client.post("/v1/auth/login", json=_CREDS).status_code == 403
+    assert client.get("/v1/me", headers={"Authorization": f"Bearer {grant}"}).status_code == 403
+    assert client.post("/v1/auth/refresh", json={"refresh_token": refresh}).status_code == 403
+
+
+def test_reenroll_requires_current_code(app_client):
+    # Audit Critical: a stolen password alone must not be able to replace a
+    # confirmed MFA factor. Re-enrollment requires a current code; first-time
+    # enrollment stays password-only.
+    client, factory = app_client
+    _seed(factory, tier="enterprise", roles=("operator",))
+    secret = client.post("/v1/mfa/enroll", json=_CREDS).json()["secret"]
+    client.post("/v1/mfa/confirm", json={**_CREDS, "code": _totp_now(secret)})
+
+    # Attacker with only the password cannot re-enroll.
+    assert client.post("/v1/mfa/enroll", json=_CREDS).status_code == 403
+    assert client.post("/v1/mfa/enroll", json={**_CREDS, "code": "000000"}).status_code == 403
+
+    # The legitimate holder, proving the current factor, can rotate to a new secret.
+    resp = client.post("/v1/mfa/enroll", json={**_CREDS, "code": _totp_now(secret)})
+    assert resp.status_code == 200
+    assert resp.json()["secret"] != secret
+
+
+def test_mfa_challenge_is_single_use(app_client):
+    # Audit High: a challenge (and code) must not mint two sessions.
+    client, factory = app_client
+    _seed(factory, tier="enterprise", roles=("operator",))
+    secret = client.post("/v1/mfa/enroll", json=_CREDS).json()["secret"]
+    client.post("/v1/mfa/confirm", json={**_CREDS, "code": _totp_now(secret)})
+    challenge = client.post("/v1/auth/login", json=_CREDS).json()["challenge"]
+    code = _totp_now(secret)
+
+    assert client.post(
+        "/v1/auth/mfa/verify", json={"challenge": challenge, "code": code}
+    ).status_code == 200
+    # Replaying the same challenge is refused.
+    assert client.post(
+        "/v1/auth/mfa/verify", json={"challenge": challenge, "code": code}
+    ).status_code == 401
+
+
+def test_api_key_grant_cannot_mint_keys(app_client):
+    # Audit High: an API-key-derived grant must not mint or revoke API keys.
+    client, factory = app_client
+    _seed(factory, tier="pro", roles=("analyst",))
+    grant = client.post("/v1/auth/login", json=_CREDS).json()["grant"]
+    hdr = {"Authorization": f"Bearer {grant}"}
+    raw = client.post("/v1/api-keys", json={"name": "ci"}, headers=hdr).json()["api_key"]
+    key_grant = client.post("/v1/auth/token", json={"api_key": raw}).json()["grant"]
+    kh = {"Authorization": f"Bearer {key_grant}"}
+
+    assert client.post("/v1/api-keys", json={"name": "child"}, headers=kh).status_code == 403
+    assert client.delete("/v1/api-keys/anything", headers=kh).status_code == 403
+    # The marker gates by issuance context, not role: interactive has it, key does not.
+    assert "api_key_manage" in client.get("/v1/me", headers=hdr).json()["capabilities"]
+    assert "api_key_manage" not in client.get("/v1/me", headers=kh).json()["capabilities"]
+
+
+def test_logout_revokes_refresh(app_client):
+    # Audit High: logout must revoke server-side, not only delete the local file.
+    client, factory = app_client
+    _seed(factory, tier="pro", roles=("analyst",))
+    refresh = client.post("/v1/auth/login", json=_CREDS).json()["refresh_token"]
+
+    assert client.post("/v1/auth/logout", json={"refresh_token": refresh}).status_code == 200
+    assert client.post("/v1/auth/refresh", json={"refresh_token": refresh}).status_code == 401
+    # Idempotent and not a token oracle: an unknown token still returns 200.
+    assert client.post("/v1/auth/logout", json={"refresh_token": "nope"}).status_code == 200

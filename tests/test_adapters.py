@@ -139,10 +139,59 @@ def test_cli_engine_check_unavailable_when_engine_absent():
     assert wraith.main(["engine", "check", "skillspector"]) == 1
 
 
-def test_cli_engine_run_unavailable_returns_0():
+def _scope_file(tmp_path, domains=("example.com",)):
+    import json
+    scope = tmp_path / "scope.json"
+    scope.write_text(
+        json.dumps({"scope": {"enabled": True, "allowlist": {"domains": list(domains)}}}),
+        encoding="utf-8",
+    )
+    return scope
+
+
+def test_cli_engine_run_unavailable_returns_0(tmp_path):
     from cli import wraith
-    # UNAVAILABLE is a clean outcome (NOT_EVALUATED), not a failure.
-    assert wraith.main(["engine", "run", "skillspector", "some-target"]) == 0
+    # UNAVAILABLE is a clean outcome (NOT_EVALUATED), not a failure. The run is now
+    # gated like scan: an in-scope target passes the scope pre-flight, then the
+    # absent engine reports unavailable.
+    scope = _scope_file(tmp_path)
+    rc = wraith.main(
+        [
+            "engine", "run", "skillspector", "https://example.com/x",
+            "--scope", str(scope),
+            "--engagement-file", str(tmp_path / "none.json"),
+        ]
+    )
+    assert rc == 0
+
+
+def test_cli_engine_run_out_of_scope_returns_2(tmp_path):
+    from cli import wraith
+    # engine run no longer reaches the adapter for an unauthorized target.
+    scope = _scope_file(tmp_path)
+    rc = wraith.main(
+        [
+            "engine", "run", "skillspector", "https://evil.test/x",
+            "--scope", str(scope),
+            "--engagement-file", str(tmp_path / "none.json"),
+        ]
+    )
+    assert rc == 2
+
+
+def test_cli_engine_run_kill_switch_returns_3(tmp_path, monkeypatch):
+    from cli import wraith
+    scope = _scope_file(tmp_path)
+    monkeypatch.setattr(wraith, "_KILL_FLAG", tmp_path / ".killed")
+    (tmp_path / ".killed").write_text("x", encoding="utf-8")
+    rc = wraith.main(
+        [
+            "engine", "run", "skillspector", "https://example.com/x",
+            "--scope", str(scope),
+            "--engagement-file", str(tmp_path / "none.json"),
+        ]
+    )
+    assert rc == 3
 
 
 def test_cli_engine_unknown_returns_2():

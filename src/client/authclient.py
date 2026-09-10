@@ -63,6 +63,18 @@ class AuthClient:
         result: dict = resp.json()
         return result
 
+    def logout(self, refresh_token: str) -> None:
+        """Best-effort server-side revocation of the refresh token.
+
+        A transport failure must not block clearing the local session, so a
+        connection error is swallowed; the caller removes the cached grant either
+        way.
+        """
+        try:
+            self._http.post("/v1/auth/logout", json={"refresh_token": refresh_token})
+        except httpx.HTTPError:
+            pass
+
 
 def grant_expired(session: dict, at: datetime | None = None) -> bool:
     expires = session.get("expires_at")

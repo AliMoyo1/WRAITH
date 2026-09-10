@@ -79,3 +79,18 @@ class ApiKey(Base):
     created_at: Mapped[str] = mapped_column(String(40))
     last_used_at: Mapped[str | None] = mapped_column(String(40), nullable=True, default=None)
     revoked_at: Mapped[str | None] = mapped_column(String(40), nullable=True, default=None)
+
+
+class ConsumedChallenge(Base):
+    """One-time MFA login challenges that have already been redeemed.
+
+    A challenge's jti is inserted here when it is presented at /v1/auth/mfa/verify;
+    the unique primary key makes a second presentation of the same challenge fail,
+    so a captured challenge cannot mint more than one session. Rows past their
+    expiry are pruned opportunistically (see repository.consume_challenge).
+    """
+
+    __tablename__ = "consumed_challenge"
+
+    jti: Mapped[str] = mapped_column(String(64), primary_key=True)
+    expires_at: Mapped[str] = mapped_column(String(40))

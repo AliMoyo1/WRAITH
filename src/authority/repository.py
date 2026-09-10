@@ -10,11 +10,22 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
+from sqlalchemy.engine import CursorResult
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from .models import ApiKey, MfaCredential, Principal, PrincipalRole, RefreshToken, Tenant
+from .models import (
+    ApiKey,
+    ConsumedChallenge,
+    MfaCredential,
+    Principal,
+    PrincipalRole,
+    RefreshToken,
+    Tenant,
+)
 from .security import hash_password
 
 
@@ -127,6 +138,41 @@ def get_refresh_token(session: Session, token_hash: str) -> RefreshToken | None:
 def revoke_refresh_token(session: Session, token: RefreshToken) -> None:
     token.revoked = True
     session.commit()
+
+
+def revoke_refresh_if_active(session: Session, token_id: str) -> bool:
+    """Atomically revoke a refresh token, returning True only for the caller that
+
+    won the race. Rotation reads, checks, and revokes in separate steps, so a
+    concurrent reuse of the same token could otherwise both pass the check; the
+    conditional UPDATE (only where it is still active) lets exactly one caller
+    flip it and mint a new session.
+    """
+    result = session.execute(
+        update(RefreshToken)
+        .where(RefreshToken.id == token_id, ~RefreshToken.revoked)
+        .values(revoked=True)
+    )
+    session.commit()
+    return cast(CursorResult, result).rowcount == 1
+
+
+def consume_challenge(session: Session, jti: str, expires_at: str) -> bool:
+    """Record a one-time MFA challenge, returning False if it was already used.
+
+    Expired rows are pruned first so the table stays bounded. The unique primary
+    key on jti makes a replayed challenge fail to insert, which is reported as a
+    replay (False) rather than raising.
+    """
+    now = datetime.now(UTC).isoformat()
+    session.execute(delete(ConsumedChallenge).where(ConsumedChallenge.expires_at < now))
+    session.add(ConsumedChallenge(jti=jti, expires_at=expires_at))
+    try:
+        session.commit()
+        return True
+    except IntegrityError:
+        session.rollback()
+        return False
 
 
 def create_api_key(

@@ -30,6 +30,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import shutil
 import uuid
 from datetime import UTC, datetime
@@ -40,6 +41,13 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 _AUDIT_GENESIS = "genesis"
+
+# Engagement and finding identifiers become filesystem paths, so they must be safe
+# by construction: a leading alphanumeric then alphanumerics, dot, dash, underscore.
+# This rejects path separators and "..", so an id can never escape its directory,
+# and it is injective (no character stripping), so two distinct ids can never
+# collapse onto the same file and silently overwrite evidence.
+_SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
 class ResultStoreError(Exception):
@@ -79,6 +87,11 @@ class ResultStore:
             raise ResultStoreError("master_key is required; do not run with a default key")
         if not engagement_id or not engagement_id.strip():
             raise ResultStoreError("engagement_id is required")
+        if not _SAFE_ID.match(engagement_id):
+            raise ResultStoreError(
+                "engagement_id must be a safe identifier (letters, digits, dot, dash, "
+                "underscore; no path separators)"
+            )
         self.engagement_id = engagement_id
         self.actor = actor or "unknown"
         self.key = _derive_key(master_key, engagement_id)
@@ -86,6 +99,12 @@ class ResultStore:
         # A distinct key for the audit MAC so audit integrity is independent of content encryption.
         self._audit_key = hashlib.sha256(b"wraith-audit-v1:" + self.key).digest()
         self.dir = Path(root) / engagement_id
+        # Belt and suspenders: even with the id validated, assert the directory
+        # resolves under the results root before creating anything.
+        try:
+            self.dir.resolve().relative_to(Path(root).resolve())
+        except ValueError as exc:
+            raise ResultStoreError("engagement_id escapes the results root") from exc
         self.dir.mkdir(parents=True, exist_ok=True)
         self._restrict(self.dir, is_dir=True)
         self.audit_path = self.dir / "audit.log"
@@ -105,11 +124,17 @@ class ResultStore:
             pass
 
     def _finding_path(self, finding_id: str) -> Path:
-        # Keep the id filesystem-safe.
-        safe = "".join(c for c in finding_id if c.isalnum() or c in "-_.")
-        if not safe:
-            raise ResultStoreError("invalid finding id")
-        return self.dir / f"{safe}.enc"
+        # Reject an unsafe id rather than stripping characters: stripping is not
+        # injective, so "a/b" and "ab" would collapse onto one file and silently
+        # overwrite each other. Fail closed instead.
+        if not _SAFE_ID.match(finding_id):
+            raise ResultStoreError(f"unsafe finding id: {finding_id!r}")
+        path = self.dir / f"{finding_id}.enc"
+        try:
+            path.resolve().relative_to(self.dir.resolve())
+        except ValueError as exc:
+            raise ResultStoreError("finding id escapes the engagement directory") from exc
+        return path
 
     # ---- findings --------------------------------------------------------
     def put_finding(self, finding: dict) -> str:
