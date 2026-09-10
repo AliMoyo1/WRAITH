@@ -7,9 +7,7 @@ capability set with ``capabilities_for`` and signs a short-lived
 
 from __future__ import annotations
 
-import base64
 import hashlib
-import json
 import secrets
 from datetime import timedelta
 
@@ -46,18 +44,6 @@ def issue_grant(
         issued_at=now_utc().isoformat(),
         expires_at=(now_utc() + timedelta(minutes=ttl_minutes)).isoformat(),
     ).sign(key)
-
-
-def encode_grant(grant: CapabilityGrant) -> str:
-    """Encode a grant as a URL-safe base64 bearer string."""
-    raw = json.dumps(grant.to_dict()).encode("utf-8")
-    return base64.urlsafe_b64encode(raw).decode("ascii")
-
-
-def decode_grant(token: str) -> CapabilityGrant:
-    """Decode a bearer string produced by encode_grant (does not verify)."""
-    raw = base64.urlsafe_b64decode(token.encode("ascii"))
-    return CapabilityGrant.from_dict(json.loads(raw))
 
 
 def hash_refresh(raw: str) -> str:

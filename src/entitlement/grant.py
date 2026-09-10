@@ -135,3 +135,19 @@ class CapabilityGrant:
             nonce=data.get("nonce", ""),
             signature=data.get("signature"),
         )
+
+
+def encode_grant(grant: CapabilityGrant) -> str:
+    """Encode a grant as a URL-safe base64 bearer string.
+
+    This is the grant's wire format, shared by every service: the authority
+    produces it, and any verifier (the Runner) decodes it with ``decode_grant``.
+    """
+    raw = json.dumps(grant.to_dict()).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii")
+
+
+def decode_grant(token: str) -> CapabilityGrant:
+    """Decode a bearer string produced by ``encode_grant``. Does not verify."""
+    raw = base64.urlsafe_b64decode(token.encode("ascii"))
+    return CapabilityGrant.from_dict(json.loads(raw))

@@ -15,7 +15,7 @@ from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, sessionmaker
 
-from entitlement import CapabilityGrant, public_from_private
+from entitlement import CapabilityGrant, decode_grant, encode_grant, public_from_private
 
 from . import repository
 from .config import (
@@ -29,8 +29,6 @@ from .config import (
 )
 from .db import create_all, make_engine, make_session_factory
 from .grants import (
-    decode_grant,
-    encode_grant,
     hash_api_key,
     hash_refresh,
     issue_grant,
