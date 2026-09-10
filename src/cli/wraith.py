@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 import uuid
 from datetime import timedelta
@@ -617,6 +618,88 @@ def _rt_authorize(args) -> int:
     return 0
 
 
+_AUTHORITY_ENV = "WRAITH_AUTHORITY_URL"
+_DEFAULT_AUTHORITY = "http://localhost:8000"
+_SESSION_PATH = _CONFIG_DIR / "session.json"
+
+
+def _authority_url(args) -> str:
+    return getattr(args, "authority", None) or os.environ.get(_AUTHORITY_ENV) or _DEFAULT_AUTHORITY
+
+
+def cmd_auth(args) -> int:
+    """Log in to the authority and manage the cached grant."""
+    if args.auth_action == "login":
+        return _auth_login(args)
+    if args.auth_action == "whoami":
+        return _auth_whoami(args)
+    if args.auth_action == "logout":
+        return _auth_logout(args)
+    print("Subcommands: login, whoami, logout")
+    return 2
+
+
+def _auth_login(args) -> int:
+    import getpass
+
+    from client import AuthClient, AuthError, save_session
+
+    if not args.tenant or not args.email:
+        print("  --tenant and --email are required")
+        return 2
+    password = args.password or os.environ.get("WRAITH_PASSWORD") or getpass.getpass("Password: ")
+    client = AuthClient(_authority_url(args))
+    try:
+        session = client.login(args.tenant, args.email, password, code=args.code)
+    except AuthError as exc:
+        print(f"  login failed: {exc}")
+        return 2
+    finally:
+        client.close()
+    save_session(_SESSION_PATH, session)
+    print(f"  logged in; grant cached at {_SESSION_PATH}")
+    print(f"  expires: {session.get('expires_at')}")
+    return 0
+
+
+def _auth_whoami(args) -> int:
+    from client import AuthClient, AuthError, grant_expired, load_session, save_session
+
+    session = load_session(_SESSION_PATH)
+    if session is None:
+        print("  not logged in; run 'wraith auth login' first")
+        return 2
+    client = AuthClient(_authority_url(args))
+    try:
+        if grant_expired(session):
+            token = session.get("refresh_token")
+            if not token:
+                print("  session expired; log in again")
+                return 2
+            session = client.refresh(token)
+            save_session(_SESSION_PATH, session)
+        identity = client.me(session["grant"])
+    except AuthError as exc:
+        print(f"  whoami failed: {exc}")
+        return 2
+    finally:
+        client.close()
+    print(f"  principal: {identity.get('principal_id')}  tenant: {identity.get('tenant_id')}")
+    print(f"  roles: {', '.join(identity.get('roles', []))}")
+    print(f"  tier: {identity.get('tier')}")
+    print(f"  capabilities: {', '.join(identity.get('capabilities', []))}")
+    return 0
+
+
+def _auth_logout(args) -> int:
+    if _SESSION_PATH.exists():
+        _SESSION_PATH.unlink()
+        print("  logged out; cached session removed")
+    else:
+        print("  no cached session")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="wraith", description="Full-spectrum offensive security platform")
     parser.add_argument("--version", action="version", version=f"WRAITH v{__version__}")
@@ -681,6 +764,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_rt.add_argument("--rt-phase", choices=["recon", "probe"], default="recon",
                       help="phase for checklist")
     p_rt.set_defaults(func=cmd_redteam)
+
+    p_auth = sub.add_parser("auth", help="log in to the WRAITH authority and cache a grant")
+    p_auth.add_argument("auth_action", choices=["login", "whoami", "logout"])
+    p_auth.add_argument("--authority", help="authority base URL (default env WRAITH_AUTHORITY_URL)")
+    p_auth.add_argument("--tenant", help="tenant slug (for login)")
+    p_auth.add_argument("--email", help="principal email (for login)")
+    p_auth.add_argument("--password", help="password (or WRAITH_PASSWORD, or prompt)")
+    p_auth.add_argument("--code", help="TOTP code (for MFA-required logins)")
+    p_auth.set_defaults(func=cmd_auth)
     return parser
 
 
