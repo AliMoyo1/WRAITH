@@ -14,7 +14,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .models import Principal, PrincipalRole, RefreshToken, Tenant
+from .models import MfaCredential, Principal, PrincipalRole, RefreshToken, Tenant
 from .security import hash_password
 
 
@@ -83,3 +83,33 @@ def store_refresh_token(
     session.add(token)
     session.commit()
     return token
+
+
+def get_tenant(session: Session, tenant_id: str) -> Tenant | None:
+    return session.get(Tenant, tenant_id)
+
+
+def get_mfa(session: Session, principal_id: str) -> MfaCredential | None:
+    return session.get(MfaCredential, principal_id)
+
+
+def upsert_mfa_secret(
+    session: Session, principal_id: str, secret_encrypted: str
+) -> MfaCredential:
+    cred = session.get(MfaCredential, principal_id)
+    if cred is None:
+        cred = MfaCredential(principal_id=principal_id, secret_encrypted=secret_encrypted)
+        session.add(cred)
+    else:
+        # Re-enrolling replaces the secret and clears the prior confirmation.
+        cred.secret_encrypted = secret_encrypted
+        cred.confirmed_at = None
+    session.commit()
+    return cred
+
+
+def confirm_mfa(session: Session, principal_id: str) -> None:
+    cred = session.get(MfaCredential, principal_id)
+    if cred is not None:
+        cred.confirmed_at = datetime.now(UTC).isoformat()
+        session.commit()
