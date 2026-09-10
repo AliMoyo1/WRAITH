@@ -29,6 +29,7 @@ repos/          # Engine clones (user clones their own)
 config/scope.yaml       # Contains target scope, do not commit
 config/llm.yaml         # Contains LLM API keys, do not commit
 config/engagement.json  # Operator engagement record, do not commit
+config/session.json     # Cached auth grant + refresh token, do not commit
 config/.killed          # Kill-switch flag, runtime state
 *.log
 results/        # Engagement results, sensitive
