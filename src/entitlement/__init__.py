@@ -9,7 +9,14 @@ gates must pass. See docs/entitlement-rbac-subscription.md.
 
 from __future__ import annotations
 
-from .grant import CapabilityGrant, generate_keypair, now_utc, public_from_private
+from .grant import (
+    CapabilityGrant,
+    decode_grant,
+    encode_grant,
+    generate_keypair,
+    now_utc,
+    public_from_private,
+)
 from .policy import (
     CapabilityClass,
     EntitlementError,
@@ -26,6 +33,8 @@ __all__ = [
     "Role",
     "Tier",
     "capabilities_for",
+    "decode_grant",
+    "encode_grant",
     "generate_keypair",
     "now_utc",
     "public_from_private",
