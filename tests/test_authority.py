@@ -268,3 +268,72 @@ def test_api_keys_require_auth(app_client):
     client, _ = app_client
     assert client.post("/v1/api-keys", json={"name": "x"}).status_code == 401
     assert client.get("/v1/api-keys").status_code == 401
+
+
+def test_admin_manage_principals_and_tier(app_client):
+    client, factory = app_client
+    _seed(factory, tier="enterprise", roles=("admin",))  # the acting admin (MFA required)
+    hdr = {"Authorization": f"Bearer {_operator_grant(client)}"}
+
+    created = client.post(
+        "/v1/admin/principals",
+        json={"email": "new@acme.example", "password": "pw123456", "roles": ["analyst"]},
+        headers=hdr,
+    )
+    assert created.status_code == 200
+    new_id = created.json()["id"]
+
+    listed = client.get("/v1/admin/principals", headers=hdr).json()["principals"]
+    assert any(p["id"] == new_id and "analyst" in p["roles"] for p in listed)
+
+    updated = client.patch(
+        f"/v1/admin/principals/{new_id}",
+        json={"roles": ["viewer"], "status": "disabled"},
+        headers=hdr,
+    )
+    assert updated.status_code == 200
+    assert updated.json()["roles"] == ["viewer"]
+    assert updated.json()["status"] == "disabled"
+
+    tier = client.patch("/v1/admin/tenant", json={"tier": "pro"}, headers=hdr)
+    assert tier.status_code == 200
+    assert tier.json()["tier"] == "pro"
+
+
+def test_admin_requires_admin_class(app_client):
+    # An analyst grant cannot reach the admin endpoints.
+    client, factory = app_client
+    _seed(factory, tier="pro", roles=("analyst",))
+    grant = client.post("/v1/auth/login", json=_CREDS).json()["grant"]
+    hdr = {"Authorization": f"Bearer {grant}"}
+    assert client.get("/v1/admin/principals", headers=hdr).status_code == 403
+    assert client.patch("/v1/admin/tenant", json={"tier": "pro"}, headers=hdr).status_code == 403
+
+
+def test_admin_rejects_unknown_role(app_client):
+    client, factory = app_client
+    _seed(factory, tier="enterprise", roles=("admin",))
+    hdr = {"Authorization": f"Bearer {_operator_grant(client)}"}
+    resp = client.post(
+        "/v1/admin/principals",
+        json={"email": "x@acme.example", "password": "pw123456", "roles": ["wizard"]},
+        headers=hdr,
+    )
+    assert resp.status_code == 400
+
+
+def test_admin_created_principal_can_login(app_client):
+    client, factory = app_client
+    _seed(factory, tier="pro", roles=("admin",))
+    hdr = {"Authorization": f"Bearer {_operator_grant(client)}"}
+    client.post(
+        "/v1/admin/principals",
+        json={"email": "viewer@acme.example", "password": "pw123456", "roles": ["viewer"]},
+        headers=hdr,
+    )
+    login = client.post(
+        "/v1/auth/login",
+        json={"tenant": "acme", "email": "viewer@acme.example", "password": "pw123456"},
+    )
+    assert login.status_code == 200
+    assert login.json()["grant"]

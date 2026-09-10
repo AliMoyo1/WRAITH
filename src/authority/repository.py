@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from .models import ApiKey, MfaCredential, Principal, PrincipalRole, RefreshToken, Tenant
@@ -174,4 +174,21 @@ def revoke_api_key(session: Session, record: ApiKey) -> None:
 
 def touch_api_key(session: Session, record: ApiKey) -> None:
     record.last_used_at = datetime.now(UTC).isoformat()
+    session.commit()
+
+
+def set_roles(session: Session, principal_id: str, roles: list[str]) -> None:
+    session.execute(delete(PrincipalRole).where(PrincipalRole.principal_id == principal_id))
+    for role in roles:
+        session.add(PrincipalRole(principal_id=principal_id, role=role))
+    session.commit()
+
+
+def set_principal_status(session: Session, principal: Principal, status: str) -> None:
+    principal.status = status
+    session.commit()
+
+
+def set_tenant_tier(session: Session, tenant: Tenant, tier: str) -> None:
+    tenant.tier = tier
     session.commit()

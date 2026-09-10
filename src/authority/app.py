@@ -53,6 +53,9 @@ _MFA_ROLES = frozenset({"operator", "admin"})
 # API-key grants are capped below the elevated classes: automation cannot trigger
 # exploitation or tenant administration without an interactive, MFA-backed login.
 _API_KEY_EXCLUDED = frozenset({"redteam_exploit", "redteam_post_exploit", "admin"})
+_VALID_ROLES = frozenset({"viewer", "analyst", "operator", "admin"})
+_VALID_TIERS = frozenset({"community", "pro", "enterprise"})
+_VALID_STATUS = frozenset({"active", "disabled"})
 
 
 class LoginRequest(BaseModel):
@@ -91,8 +94,34 @@ class TokenRequest(BaseModel):
     api_key: str
 
 
+class AdminPrincipalCreate(BaseModel):
+    email: str
+    password: str
+    roles: list[str] = []
+
+
+class AdminPrincipalUpdate(BaseModel):
+    roles: list[str] | None = None
+    status: str | None = None
+
+
+class AdminTenantUpdate(BaseModel):
+    tier: str
+
+
 def _mfa_required(roles: list[str]) -> bool:
     return any(role in _MFA_ROLES for role in roles)
+
+
+def _require_class(grant: CapabilityGrant, capability_class: str) -> None:
+    if not grant.allows(capability_class):
+        raise HTTPException(status_code=403, detail="insufficient capability")
+
+
+def _validate_roles(roles: list[str]) -> None:
+    unknown = [r for r in roles if r not in _VALID_ROLES]
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"unknown role: {', '.join(unknown)}")
 
 
 def _is_past(iso: str) -> bool:
@@ -310,6 +339,83 @@ def create_app(
                 "expires_at": grant.expires_at,
             }
             return payload
+
+    @app.post("/v1/admin/principals")
+    def admin_create_principal(
+        body: AdminPrincipalCreate, authorization: str = Header(default="")
+    ) -> dict[str, object]:
+        grant = _grant_from_header(authorization, key)
+        _require_class(grant, "admin")
+        _validate_roles(body.roles)
+        with session_factory() as session:
+            if repository.get_principal_by_email(session, grant.tenant_id, body.email) is not None:
+                raise HTTPException(status_code=409, detail="email already exists")
+            principal = repository.create_principal(
+                session, grant.tenant_id, body.email, body.password, body.roles
+            )
+            payload: dict[str, object] = {
+                "id": principal.id,
+                "email": principal.email,
+                "roles": sorted(body.roles),
+            }
+        return payload
+
+    @app.get("/v1/admin/principals")
+    def admin_list_principals(authorization: str = Header(default="")) -> dict[str, object]:
+        grant = _grant_from_header(authorization, key)
+        _require_class(grant, "admin")
+        with session_factory() as session:
+            rows = [
+                {
+                    "id": p.id,
+                    "email": p.email,
+                    "status": p.status,
+                    "roles": sorted(repository.get_roles(session, p.id)),
+                }
+                for p in repository.list_principals(session, grant.tenant_id)
+            ]
+        return {"principals": rows}
+
+    @app.patch("/v1/admin/principals/{principal_id}")
+    def admin_update_principal(
+        principal_id: str, body: AdminPrincipalUpdate, authorization: str = Header(default="")
+    ) -> dict[str, object]:
+        grant = _grant_from_header(authorization, key)
+        _require_class(grant, "admin")
+        with session_factory() as session:
+            principal = repository.get_principal(session, grant.tenant_id, principal_id)
+            if principal is None:
+                raise HTTPException(status_code=404, detail="principal not found")
+            if body.roles is not None:
+                _validate_roles(body.roles)
+                repository.set_roles(session, principal.id, body.roles)
+            if body.status is not None:
+                if body.status not in _VALID_STATUS:
+                    raise HTTPException(status_code=400, detail="invalid status")
+                repository.set_principal_status(session, principal, body.status)
+            payload: dict[str, object] = {
+                "id": principal.id,
+                "email": principal.email,
+                "status": principal.status,
+                "roles": sorted(repository.get_roles(session, principal.id)),
+            }
+        return payload
+
+    @app.patch("/v1/admin/tenant")
+    def admin_update_tenant(
+        body: AdminTenantUpdate, authorization: str = Header(default="")
+    ) -> dict[str, object]:
+        grant = _grant_from_header(authorization, key)
+        _require_class(grant, "admin")
+        if body.tier not in _VALID_TIERS:
+            raise HTTPException(status_code=400, detail="invalid tier")
+        with session_factory() as session:
+            tenant = repository.get_tenant(session, grant.tenant_id)
+            if tenant is None:
+                raise HTTPException(status_code=404, detail="tenant not found")
+            repository.set_tenant_tier(session, tenant, body.tier)
+            payload: dict[str, object] = {"id": tenant.id, "tier": tenant.tier}
+        return payload
 
     @app.get("/v1/me")
     def me(authorization: str = Header(default="")) -> dict[str, object]:
