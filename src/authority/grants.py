@@ -26,9 +26,14 @@ def issue_grant(
     roles: list[str],
     tier: str,
     ttl_minutes: int = DEFAULT_GRANT_TTL_MINUTES,
+    exclude: frozenset[str] = frozenset(),
 ) -> CapabilityGrant:
-    """Compute the capability set for (roles, tier) and sign a short-lived grant."""
-    capabilities = capabilities_for(roles, tier)
+    """Compute the capability set for (roles, tier) and sign a short-lived grant.
+
+    ``exclude`` drops capability classes from the computed set, used to cap the
+    classes an API-key grant may carry.
+    """
+    capabilities = [c for c in capabilities_for(roles, tier) if c not in exclude]
     return CapabilityGrant(
         tenant_id=tenant_id,
         principal_id=principal_id,
@@ -61,3 +66,17 @@ def new_refresh_token() -> tuple[str, str]:
     """Return (raw_token, sha256_hex). Store only the hash; hand out the raw once."""
     raw = secrets.token_urlsafe(32)
     return raw, hash_refresh(raw)
+
+
+_API_KEY_PREFIX = "wak_"
+
+
+def hash_api_key(raw: str) -> str:
+    """Hash an API key for storage and lookup (never store the raw value)."""
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def new_api_key() -> tuple[str, str]:
+    """Return (raw_key, sha256_hex). The raw key carries a 'wak_' prefix."""
+    raw = _API_KEY_PREFIX + secrets.token_urlsafe(32)
+    return raw, hash_api_key(raw)
