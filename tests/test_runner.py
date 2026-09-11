@@ -12,11 +12,42 @@ from datetime import timedelta
 
 import pytest
 
+from adapters import AdapterResult, EngineAdapter, SubprocessResult
 from entitlement import CapabilityGrant, encode_grant, generate_keypair, now_utc
 
 PRIV, PUB = generate_keypair()
 SIGN_KEY = b"runner-engagement-signing-key"
+RESULT_KEY = b"runner-result-master-key"
 _SCAN_CAPS = ("control_plane_scan", "control_plane_read")
+
+
+class _FakeScanAdapter(EngineAdapter):
+    name = "skillspector"
+
+    def is_available(self):
+        return True, "ok"
+
+    def _default_runner(self, request):
+        return SubprocessResult(0, "", "")
+
+    def _normalize(self, raw):
+        return []
+
+    def run(self, request, runner=None):
+        return AdapterResult(
+            engine=self.name,
+            status="OK",
+            findings=[
+                {
+                    "finding_id": "f1", "fingerprint": "fp1", "rule_id": "R1", "layer": 6,
+                    "severity": "HIGH", "confidence": "HIGH", "evaluation_result": "FINDING",
+                }
+            ],
+        )
+
+
+def _fake_adapters(track):
+    return [_FakeScanAdapter()]
 
 
 @pytest.fixture
@@ -25,11 +56,20 @@ def runner(tmp_path):
 
     from runner import create_app
     from runner.db import create_all, make_engine, make_session_factory
+    from runner.worker import InlineExecutor
 
     engine = make_engine(f"sqlite:///{tmp_path / 'runner.db'}")
     create_all(engine)
     factory = make_session_factory(engine)
-    app = create_app(session_factory=factory, entitlement_public_key=PUB, signing_key=SIGN_KEY)
+    app = create_app(
+        session_factory=factory,
+        entitlement_public_key=PUB,
+        signing_key=SIGN_KEY,
+        result_key=RESULT_KEY,
+        result_root=tmp_path / "results",
+        executor=InlineExecutor(),
+        adapters_for=_fake_adapters,
+    )
     return TestClient(app), factory
 
 
@@ -168,3 +208,83 @@ def test_consume_token_durable_single_use(runner):
         assert consume_token(s, "t-a", "nonce-1") is True
         assert consume_token(s, "t-a", "nonce-1") is False  # replay refused, durable
         assert consume_token(s, "t-b", "nonce-1") is True  # same nonce, other tenant, independent
+
+
+def test_scan_runs_and_stores_findings(runner):
+    client, _ = runner
+    created, hdr = _create_engagement(client, domains=("example.com",))
+    eid = created.json()["id"]
+    resp = client.post(
+        "/v1/scans",
+        json={"engagement_id": eid, "target": "https://example.com/x", "track": "sast"},
+        headers=hdr,
+    )
+    assert resp.status_code == 200
+    sid = resp.json()["id"]
+    # The inline executor ran the scan synchronously, so findings are already stored.
+    got = client.get(f"/v1/scans/{sid}", headers=hdr).json()
+    assert got["status"] == "completed"
+    assert {f["finding_id"] for f in got["findings"]} == {"f1"}
+
+
+def test_scan_requires_scan_capability(runner):
+    client, _ = runner
+    created, hdr = _create_engagement(client)
+    eid = created.json()["id"]
+    ro = {"Authorization": f"Bearer {_bearer(caps=('control_plane_read',))}"}
+    resp = client.post(
+        "/v1/scans",
+        json={"engagement_id": eid, "target": "https://example.com/x", "track": "sast"},
+        headers=ro,
+    )
+    assert resp.status_code == 403
+
+
+def test_scan_out_of_scope_refused(runner):
+    client, _ = runner
+    created, hdr = _create_engagement(client, domains=("example.com",))
+    eid = created.json()["id"]
+    resp = client.post(
+        "/v1/scans",
+        json={"engagement_id": eid, "target": "https://evil.test/x", "track": "sast"},
+        headers=hdr,
+    )
+    assert resp.status_code == 403
+
+
+def test_scan_under_closed_engagement_refused(runner):
+    client, _ = runner
+    created, hdr = _create_engagement(client)
+    eid = created.json()["id"]
+    client.post(f"/v1/engagements/{eid}/close", headers=hdr)
+    resp = client.post(
+        "/v1/scans",
+        json={"engagement_id": eid, "target": "https://example.com/x", "track": "sast"},
+        headers=hdr,
+    )
+    assert resp.status_code == 403
+
+
+def test_scan_tenant_isolation(runner):
+    client, _ = runner
+    created, _ = _create_engagement(client, tenant="t-a")
+    eid = created.json()["id"]
+    b = {"Authorization": f"Bearer {_bearer(tenant='t-b', caps=_SCAN_CAPS)}"}
+    resp = client.post(
+        "/v1/scans",
+        json={"engagement_id": eid, "target": "https://example.com/x", "track": "sast"},
+        headers=b,
+    )
+    assert resp.status_code == 404  # engagement belongs to tenant A
+
+
+def test_scan_unsupported_track(runner):
+    client, _ = runner
+    created, hdr = _create_engagement(client)
+    eid = created.json()["id"]
+    resp = client.post(
+        "/v1/scans",
+        json={"engagement_id": eid, "target": "https://example.com/x", "track": "web"},
+        headers=hdr,
+    )
+    assert resp.status_code == 400  # dynamic/offensive tracks are not yet server-side
