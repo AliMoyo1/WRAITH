@@ -59,3 +59,36 @@ def signing_key() -> bytes:
             "signing key to sign engagements and verify approval tokens."
         )
     return raw.encode("utf-8")
+
+
+RESULT_KEY_ENV = "WRAITH_RUNNER_RESULT_KEY"
+RESULTS_DIR_ENV = "WRAITH_RUNNER_RESULTS_DIR"
+ENGINES_DIR_ENV = "WRAITH_RUNNER_ENGINES_DIR"
+_DEFAULT_RESULTS_DIR = "./runner-results"
+_DEFAULT_ENGINES_DIR = "repos"
+
+
+def result_key() -> bytes:
+    """Return the result-store master key, or raise (no default, fail closed).
+
+    Findings are encrypted per scan under a key derived from this master key; the
+    Runner is the only holder, distinct from the entitlement and engagement keys.
+    """
+    raw = os.environ.get(RESULT_KEY_ENV)
+    if not raw or not raw.strip():
+        raise RuntimeError(
+            f"{RESULT_KEY_ENV} is not set. The Runner requires a result-store master key."
+        )
+    return raw.encode("utf-8")
+
+
+def results_root() -> str:
+    """Directory the Runner writes per-scan encrypted results under (has a default)."""
+    raw = os.environ.get(RESULTS_DIR_ENV)
+    return raw.strip() if raw and raw.strip() else _DEFAULT_RESULTS_DIR
+
+
+def engines_dir() -> str:
+    """Directory the operator installs the cloned engines under, server-side."""
+    raw = os.environ.get(ENGINES_DIR_ENV)
+    return raw.strip() if raw and raw.strip() else _DEFAULT_ENGINES_DIR

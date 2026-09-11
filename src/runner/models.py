@@ -31,6 +31,7 @@ class Scan(Base):
     track: Mapped[str] = mapped_column(String(32))
     status: Mapped[str] = mapped_column(String(32), default="queued")
     created_at: Mapped[str] = mapped_column(String(40))
+    finished_at: Mapped[str | None] = mapped_column(String(40), nullable=True, default=None)
 
 
 class Engagement(Base):

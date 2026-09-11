@@ -16,19 +16,27 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Callable
+from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, sessionmaker
 
+from adapters import EngineAdapter
 from entitlement import CapabilityClass, CapabilityGrant, decode_grant
+from store import ResultStore
 
 from . import repository
 from .config import database_url
+from .config import engines_dir as _default_engines_dir
 from .config import entitlement_public_key as _default_entitlement_public_key
+from .config import result_key as _default_result_key
+from .config import results_root as _default_results_root
 from .config import signing_key as _default_signing_key
 from .db import create_all, make_engine, make_session_factory
 from .engagements import build_engagement, engagement_from_row, scope_from_spec
+from .worker import BackgroundExecutor, Executor, default_adapters, run_scan
 
 
 def _grant_from_header(authorization: str, public_key: bytes) -> CapabilityGrant:
@@ -61,10 +69,24 @@ class EngagementCreate(BaseModel):
     ttl_minutes: int = 480
 
 
+class ScanCreate(BaseModel):
+    engagement_id: str
+    target: str
+    track: str
+
+
+# Track -> entitlement capability class. Defensive (sast) only this sub-phase.
+_TRACK_CLASS = {"sast": "control_plane_scan"}
+
+
 def create_app(
     session_factory: sessionmaker[Session] | None = None,
     entitlement_public_key: bytes | None = None,
     signing_key: bytes | None = None,
+    result_key: bytes | None = None,
+    result_root: str | Path | None = None,
+    executor: Executor | None = None,
+    adapters_for: Callable[[str], list[EngineAdapter]] | None = None,
 ) -> FastAPI:
     if session_factory is None:
         engine = make_engine(database_url())
@@ -76,6 +98,12 @@ def create_app(
         else _default_entitlement_public_key()
     )
     sign_key = signing_key if signing_key is not None else _default_signing_key()
+    rkey = result_key if result_key is not None else _default_result_key()
+    rroot = Path(result_root) if result_root is not None else Path(_default_results_root())
+    scan_executor: Executor = executor if executor is not None else BackgroundExecutor()
+    build_adapters = adapters_for or (
+        lambda track: default_adapters(track, _default_engines_dir())
+    )
 
     app = FastAPI(title="WRAITH Runner", version="0.1.0")
     app.state.session_factory = session_factory
@@ -172,5 +200,66 @@ def create_app(
             repository.close_engagement(session, row)
             payload: dict[str, object] = {"id": row.id, "open": row.open}
         return payload
+
+    @app.post("/v1/scans")
+    def scan_create(
+        body: ScanCreate, authorization: str = Header(default="")
+    ) -> dict[str, object]:
+        grant = _grant_from_header(authorization, pub)
+        # Entitlement gate: the capability class for the track (defensive only now).
+        capability = _TRACK_CLASS.get(body.track)
+        if capability is None:
+            raise HTTPException(status_code=400, detail=f"unsupported track: {body.track}")
+        _require_class(grant, capability)
+        with session_factory() as session:
+            row = repository.get_engagement(session, grant.tenant_id, body.engagement_id)
+            if row is None:
+                raise HTTPException(status_code=404, detail="engagement not found")
+            # Engagement gate: the kernel's own validity check plus target-in-scope.
+            engagement = engagement_from_row(row)
+            ok, reason = engagement.is_valid(sign_key)
+            if not ok:
+                raise HTTPException(status_code=403, detail=f"engagement invalid: {reason}")
+            if not engagement.scope.allows(body.target):
+                raise HTTPException(status_code=403, detail="target not in engagement scope")
+            scan = repository.create_scan(
+                session,
+                grant.tenant_id,
+                target=body.target,
+                track=body.track,
+                engagement_id=body.engagement_id,
+                status="queued",
+            )
+            scan_id = scan.id
+        # Enqueue off the request thread; the executor runs it (inline in tests).
+        tenant_id = grant.tenant_id
+        target = body.target
+        adapters = build_adapters(body.track)
+        scan_executor.submit(
+            lambda: run_scan(session_factory, rroot, rkey, adapters, tenant_id, scan_id, target)
+        )
+        return {"id": scan_id, "status": "queued"}
+
+    @app.get("/v1/scans/{scan_id}")
+    def scan_get(scan_id: str, authorization: str = Header(default="")) -> dict[str, object]:
+        grant = _grant_from_header(authorization, pub)
+        _require_class(grant, CapabilityClass.CONTROL_PLANE_READ.value)
+        with session_factory() as session:
+            scan = repository.get_scan(session, grant.tenant_id, scan_id)
+            if scan is None:
+                raise HTTPException(status_code=404, detail="scan not found")
+            meta: dict[str, object] = {
+                "id": scan.id,
+                "status": scan.status,
+                "target": scan.target,
+                "track": scan.track,
+                "engagement_id": scan.engagement_id,
+                "created_at": scan.created_at,
+                "finished_at": scan.finished_at,
+            }
+        # Findings live in the per-scan encrypted store (isolated by scan id + tenant).
+        store = ResultStore(rroot, scan_id, rkey, actor=f"runner:{grant.tenant_id}")
+        meta["findings"] = [store.get_finding(fid) for fid in store.list_findings()]
+        return meta
 
     return app

@@ -100,3 +100,12 @@ def consume_token(session: Session, tenant_id: str, nonce: str) -> bool:
     except IntegrityError:
         session.rollback()
         return False
+
+
+def set_scan_status(
+    session: Session, scan: Scan, status: str, finished_at: str | None = None
+) -> None:
+    scan.status = status
+    if finished_at is not None:
+        scan.finished_at = finished_at
+    session.commit()
