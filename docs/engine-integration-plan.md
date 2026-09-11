@@ -295,9 +295,13 @@ All four adopted as recommended.
 1. Exploitation gating: SQLMap and ZAP active-scan are excluded from `scan`
    auto-select and run only via a token-gated `engine run` (`Track.EXPLOITATION` plus
    a single-use approval token). No exploitation engine is ever auto-run.
-2. Sequencing: build WS0 through Nuclei (phases 1-4) on the local CLI now; hold
-   SQLMap and ZAP active-scan (phase 6) until the Runner's server-side worker can
-   isolate them per run. ZAP passive (phase 5) may land locally.
+2. Sequencing (chosen 2026-09-11): build the cheap defensive slice now (WS0 + Trivy
+   + Semgrep, phases 1-2) on the local CLI, then resume the Runner rollout
+   (server-side execution sub-phases 3-6). The active engines (Nmap, Nuclei, ZAP
+   passive; phases 3-5) land around the Runner's execution path; SQLMap and ZAP
+   active-scan (phase 6) wait until the Runner's server-side worker can isolate them
+   per run. The adapters are reused by the Runner worker unchanged, so the local-CLI
+   work is not throwaway.
 3. Connect-time scope: each active adapter (Nmap, Nuclei, ZAP) is bound to a single
    in-scope host per run to start, and rejects multi-host or CIDR targets; a
    per-connection scope guard is deferred to a later change.
