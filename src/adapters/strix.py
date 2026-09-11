@@ -20,29 +20,8 @@ import sys
 from pathlib import Path
 
 from .base import AdapterRequest, EngineAdapter, SubprocessResult, run_subprocess, scrubbed_env
-from .sarif import SarifResult, parse_sarif_results
-
-# Keyword buckets (matched against rule id + message + tags) -> WRAITH layer.
-_LAYER_KEYWORDS = [
-    (7, ("prompt", "llm", "mcp", "agent", "memory", "rag", "tool-poison", "tool poison")),
-    (5, ("aws", "azure", "gcp", "s3", "iam", "kubernetes", "k8s", "cloud")),
-    (4, ("port", "ssh", "smtp", "smb", "kerberos", "ldap", "dns", "network")),
-    (3, ("graphql", "jwt", "oauth", "bola", "api")),
-    (2, ("xss", "sqli", "sql injection", "ssrf", "csrf", "idor", "web", "xxe")),
-]
-
-
-def _severity(level: str, security_severity: float | None) -> str:
-    if security_severity is not None:
-        if security_severity >= 9.0:
-            return "CRITICAL"
-        if security_severity >= 7.0:
-            return "HIGH"
-        if security_severity >= 4.0:
-            return "MEDIUM"
-        if security_severity > 0:
-            return "LOW"
-    return {"error": "HIGH", "warning": "MEDIUM", "note": "LOW"}.get(level.lower(), "INFORMATIONAL")
+from .sarif import parse_sarif_results
+from .sarif_mapper import to_finding
 
 
 class StrixAdapter(EngineAdapter):
@@ -128,32 +107,9 @@ class StrixAdapter(EngineAdapter):
 
     # ---- normalization ---------------------------------------------------
     def _normalize(self, raw_output: str) -> list[dict]:
-        return [self._map(r) for r in parse_sarif_results(raw_output)]
-
-    def _layer_for(self, result: SarifResult) -> int:
-        haystack = " ".join([result.rule_id, result.message, *result.tags]).lower()
-        for layer, keywords in _LAYER_KEYWORDS:
-            if any(k in haystack for k in keywords):
-                return layer
-        return self.default_layer
-
-    def _map(self, r: SarifResult) -> dict:
-        fingerprint = r.fingerprint or f"{r.rule_id}:{r.file}:{r.start_line}"
-        return {
-            "finding_id": f"strix-{fingerprint}",
-            "fingerprint": fingerprint,
-            "rule_id": r.rule_id,
-            "engine": self.name,
-            "layer": self._layer_for(r),
-            "title": r.message or r.rule_id,
-            "description": r.message or None,
-            "rule_lifecycle": "ACTIVE",
-            "implementation_capability": "IMPLEMENTED",
-            "evaluation_result": "FINDING",
-            "severity": _severity(r.level, r.security_severity),
-            "confidence": "MEDIUM",  # SARIF has no standard confidence field
-            "location": {"target": r.file, "file": r.file, "start_line": r.start_line, "end_line": r.end_line},
-            "policy_evidence": {"state": "UNKNOWN", "reason": "not assessed by Strix"},
-            "remediation": {},
-            "coverage_status": "INTEGRATED",
-        }
+        # Layer inference, severity, and the finding shape are shared with every
+        # other SARIF engine; see adapters.sarif_mapper.
+        return [
+            to_finding(r, self.name, self.default_layer)
+            for r in parse_sarif_results(raw_output)
+        ]
