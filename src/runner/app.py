@@ -38,7 +38,15 @@ from .config import results_root as _default_results_root
 from .config import signing_key as _default_signing_key
 from .db import create_all, make_engine, make_session_factory
 from .engagements import build_engagement, engagement_from_row, scope_from_spec
-from .worker import BackgroundExecutor, Executor, default_adapters, run_scan
+from .tokens import TokenError, consume_approval_token
+from .worker import (
+    BackgroundExecutor,
+    CubeSandbox,
+    Executor,
+    Sandbox,
+    default_adapters,
+    run_scan,
+)
 
 
 def _grant_from_header(authorization: str, public_key: bytes) -> CapabilityGrant:
@@ -75,10 +83,13 @@ class ScanCreate(BaseModel):
     engagement_id: str
     target: str
     track: str
+    token: dict | None = None  # required for a gated (offensive) track
 
 
-# Track -> entitlement capability class. Defensive (sast) only this sub-phase.
-_TRACK_CLASS = {"sast": "control_plane_scan"}
+# Track -> entitlement capability class.
+_TRACK_CLASS = {"sast": "control_plane_scan", "exploit": "redteam_exploit"}
+# Gated (consequential) track -> the approval-token action it requires.
+_GATED_TRACKS = {"exploit": "exploit"}
 
 
 class KillRequest(BaseModel):
@@ -98,6 +109,7 @@ def create_app(
     executor: Executor | None = None,
     adapters_for: Callable[[str], list[EngineAdapter]] | None = None,
     platform_key: bytes | None = None,
+    sandbox: Sandbox | None = None,
 ) -> FastAPI:
     if session_factory is None:
         engine = make_engine(database_url())
@@ -116,6 +128,7 @@ def create_app(
         lambda track: default_adapters(track, _default_engines_dir())
     )
     plat_key = platform_key if platform_key is not None else _default_platform_key()
+    scan_sandbox = sandbox if sandbox is not None else CubeSandbox()
 
     app = FastAPI(title="WRAITH Runner", version="0.1.0")
     app.state.session_factory = session_factory
@@ -236,6 +249,21 @@ def create_app(
                 raise HTTPException(status_code=403, detail=f"engagement invalid: {reason}")
             if not engagement.scope.allows(body.target):
                 raise HTTPException(status_code=403, detail="target not in engagement scope")
+            # Token gate: a gated (offensive) track additionally requires a valid,
+            # single-use, target-bound approval token, consumed durably here.
+            action = _GATED_TRACKS.get(body.track)
+            if action is not None:
+                if not body.token:
+                    raise HTTPException(
+                        status_code=403, detail="gated track requires an approval token"
+                    )
+                try:
+                    consume_approval_token(
+                        session, grant.tenant_id, body.token, sign_key,
+                        body.engagement_id, action, body.target,
+                    )
+                except TokenError as exc:
+                    raise HTTPException(status_code=403, detail=str(exc)) from exc
             scan = repository.create_scan(
                 session,
                 grant.tenant_id,
@@ -249,8 +277,13 @@ def create_app(
         tenant_id = grant.tenant_id
         target = body.target
         adapters = build_adapters(body.track)
+        # Offensive (gated) tracks run inside the sandbox; defensive tracks run directly.
+        run_sandbox = scan_sandbox if body.track in _GATED_TRACKS else None
         scan_executor.submit(
-            lambda: run_scan(session_factory, rroot, rkey, adapters, tenant_id, scan_id, target)
+            lambda: run_scan(
+                session_factory, rroot, rkey, adapters, tenant_id, scan_id, target,
+                sandbox=run_sandbox,
+            )
         )
         return {"id": scan_id, "status": "queued"}
 
