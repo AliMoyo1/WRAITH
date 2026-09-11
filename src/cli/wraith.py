@@ -60,7 +60,12 @@ _RESULTS_ROOT = _REPO_ROOT / "results"
 _ENGINE_DIRS = {"skillspector": "repos/SkillSpector", "strix": "repos/strix"}
 # Engine -> analysis track used by the execution gate, so a single engine run is
 # authorized under the track that matches the engine (parity with scan).
-_TRACK_FOR_ENGINE = {"skillspector": Track.SAST_AGENTIC, "strix": Track.WEB_API}
+_TRACK_FOR_ENGINE = {
+    "skillspector": Track.SAST_AGENTIC,
+    "strix": Track.WEB_API,
+    "trivy": Track.SAST_AGENTIC,
+    "semgrep": Track.SAST_AGENTIC,
+}
 
 
 def _scope_path(args) -> Path:
@@ -74,7 +79,14 @@ def _load_scope_or_empty(path: Path) -> Scope:
 
 
 # track -> engine domains; "all" selects by target kind (static repo vs dynamic host).
-_TRACK_DOMAINS = {"skillspector": {"sast", "agentic"}, "strix": {"web", "api", "network", "cloud"}}
+_TRACK_DOMAINS = {
+    "skillspector": {"sast", "agentic"},
+    "strix": {"web", "api", "network", "cloud"},
+    "trivy": {"sast"},
+    "semgrep": {"sast"},
+}
+# Domains that operate on a static target (a local repo path) rather than a live host.
+_STATIC_DOMAINS = {"sast", "agentic"}
 
 
 def _adapters_for(track: str, target: str) -> list[str]:
@@ -84,7 +96,10 @@ def _adapters_for(track: str, target: str) -> list[str]:
     selected: list[str] = []
     for name, domains in _TRACK_DOMAINS.items():
         if track == "all":
-            if (name == "skillspector" and static_ok) or (name == "strix" and dynamic_ok):
+            # Select every engine whose kind matches the target: static engines
+            # (repo scanners) for a repo path, dynamic engines for a live host.
+            is_static = bool(domains & _STATIC_DOMAINS)
+            if (is_static and static_ok) or (not is_static and dynamic_ok):
                 selected.append(name)
         elif track in domains:
             selected.append(name)

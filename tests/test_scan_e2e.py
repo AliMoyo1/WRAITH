@@ -77,7 +77,11 @@ def test_scan_without_engagement_is_ephemeral(tmp_path, monkeypatch):
     ])
     assert rc == 0
     data = json.loads(out.read_text(encoding="utf-8"))
-    assert data["engagement_id"] is None and len(data["findings"]) == 2
+    # engagement_id None confirms the ephemeral path; the fake adapter's findings are
+    # returned. Asserted as a set so the count is independent of how many static
+    # engines the repo scan now selects.
+    assert data["engagement_id"] is None
+    assert {f["finding_id"] for f in data["findings"]} == {"f1", "f2"}
 
 
 def test_scan_out_of_scope_under_engagement_refused(tmp_path, monkeypatch):
@@ -106,7 +110,8 @@ def test_scan_kill_switch_blocks(tmp_path, monkeypatch):
 
 def test_adapters_for_selection():
     from cli import wraith
+    # Dynamic host -> dynamic engines only; static repo -> static engines only.
     assert wraith._adapters_for("all", "https://example.com/x") == ["strix"]
-    assert wraith._adapters_for("all", "/home/user/repo") == ["skillspector"]
-    assert wraith._adapters_for("sast", "anything") == ["skillspector"]
+    assert wraith._adapters_for("all", "/home/user/repo") == ["skillspector", "trivy", "semgrep"]
+    assert wraith._adapters_for("sast", "anything") == ["skillspector", "trivy", "semgrep"]
     assert wraith._adapters_for("web", "anything") == ["strix"]
