@@ -861,6 +861,37 @@ def _runner_scans(client, grant: str, args) -> int:
     return 0
 
 
+def cmd_evidence(args) -> int:
+    """Verify a signed evidence bundle with the evidence public key."""
+    if args.evidence_action == "verify":
+        return _evidence_verify(args)
+    print("Subcommands: verify")
+    return 2
+
+
+def _evidence_verify(args) -> int:
+    import json
+
+    from evidence import public_key, verify_bundle
+
+    if not args.file:
+        print("  a bundle file is required")
+        return 2
+    try:
+        data = json.loads(Path(args.file).read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError) as exc:
+        print(f"  cannot read bundle: {exc}")
+        return 2
+    try:
+        pub = public_key()
+    except RuntimeError as exc:
+        print(f"  {exc}")
+        return 2
+    ok, reason = verify_bundle(data, pub)
+    print(f"  {'VALID' if ok else 'INVALID'}: {reason}")
+    return 0 if ok else 2
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="wraith", description="Full-spectrum offensive security platform")
     parser.add_argument("--version", action="version", version=f"WRAITH v{__version__}")
@@ -949,6 +980,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_runner.add_argument("--by", help="authorizing operator (for engage)")
     p_runner.add_argument("--hours", type=float, default=8.0, help="engagement lifetime in hours (for engage)")
     p_runner.set_defaults(func=cmd_runner)
+
+    p_evidence = sub.add_parser("evidence", help="verify a signed evidence bundle")
+    p_evidence.add_argument("evidence_action", choices=["verify"])
+    p_evidence.add_argument("file", nargs="?", help="path to the bundle JSON")
+    p_evidence.set_defaults(func=cmd_evidence)
     return parser
 
 

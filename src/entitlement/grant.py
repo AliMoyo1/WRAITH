@@ -59,6 +59,27 @@ def public_from_private(private_key: bytes) -> bytes:
     return Ed25519PrivateKey.from_private_bytes(private_key).public_key().public_bytes_raw()
 
 
+def sign_bytes(private_key: bytes, data: bytes) -> str:
+    """Ed25519-sign arbitrary bytes; return the signature as url-safe base64.
+
+    The shared byte-level signer: grants sign their own payload, and evidence
+    bundles sign theirs, both through this so the key handling lives in one place.
+    """
+    signer = Ed25519PrivateKey.from_private_bytes(private_key)
+    return base64.urlsafe_b64encode(signer.sign(data)).decode("ascii")
+
+
+def verify_bytes(public_key: bytes, signature: str, data: bytes) -> bool:
+    """Verify an Ed25519 signature (url-safe base64) over bytes. False on any failure."""
+    try:
+        Ed25519PublicKey.from_public_bytes(public_key).verify(
+            base64.urlsafe_b64decode(signature), data
+        )
+        return True
+    except (InvalidSignature, ValueError):
+        return False
+
+
 @dataclass
 class CapabilityGrant:
     """A signed, expiring statement of the capability classes a principal holds.

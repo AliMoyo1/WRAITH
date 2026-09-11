@@ -16,6 +16,8 @@ from .grant import (
     generate_keypair,
     now_utc,
     public_from_private,
+    sign_bytes,
+    verify_bytes,
 )
 from .policy import (
     CapabilityClass,
@@ -39,4 +41,6 @@ __all__ = [
     "now_utc",
     "public_from_private",
     "require_entitlement",
+    "sign_bytes",
+    "verify_bytes",
 ]
