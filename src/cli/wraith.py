@@ -744,6 +744,123 @@ def _auth_logout(args) -> int:
     return 0
 
 
+_RUNNER_ENV = "WRAITH_RUNNER_URL"
+_DEFAULT_RUNNER = "http://localhost:8090"
+
+
+def _runner_url(args) -> str:
+    return getattr(args, "runner", None) or os.environ.get(_RUNNER_ENV) or _DEFAULT_RUNNER
+
+
+def _load_grant(args) -> str | None:
+    """Return the cached grant, refreshing it against the authority if expired."""
+    from client import AuthClient, AuthError, grant_expired, load_session, refreshed, save_session
+
+    session = load_session(_SESSION_PATH)
+    if session is None:
+        print("  not logged in; run 'wraith auth login' first")
+        return None
+    if grant_expired(session):
+        auth = AuthClient(_authority_url(args))
+        try:
+            session = refreshed(auth, session)
+        except AuthError as exc:
+            print(f"  session expired and refresh failed: {exc}")
+            return None
+        finally:
+            auth.close()
+        save_session(_SESSION_PATH, session)
+    grant = session.get("grant")
+    return str(grant) if grant else None
+
+
+def _scope_to_spec(scope) -> dict:
+    return {
+        "enabled": scope.enabled,
+        "allow_metadata": scope.allow_metadata,
+        "block_private": scope.block_private,
+        "allowlist": {
+            "cidrs": scope.allow.cidrs, "domains": scope.allow.domains,
+            "urls": scope.allow.urls, "repo_paths": scope.allow.repo_paths,
+        },
+        "blocklist": {
+            "cidrs": scope.block.cidrs, "domains": scope.block.domains,
+            "urls": scope.block.urls, "repo_paths": scope.block.repo_paths,
+        },
+    }
+
+
+def cmd_runner(args) -> int:
+    """Drive the Runner using the cached grant: engagements and scans."""
+    from client import RunnerClient, RunnerError
+
+    grant = _load_grant(args)
+    if grant is None:
+        return 2
+    client = RunnerClient(_runner_url(args))
+    try:
+        if args.runner_action == "engage":
+            return _runner_engage(client, grant, args)
+        if args.runner_action == "scan":
+            return _runner_scan(client, grant, args)
+        if args.runner_action == "status":
+            return _runner_status(client, grant, args)
+        if args.runner_action == "scans":
+            return _runner_scans(client, grant, args)
+        print("Subcommands: engage, scan, status, scans")
+        return 2
+    except RunnerError as exc:
+        print(f"  runner error: {exc}")
+        return 2
+    finally:
+        client.close()
+
+
+def _runner_engage(client, grant: str, args) -> int:
+    scope_path = _scope_path(args)
+    if not scope_path.exists():
+        print(f"  no scope file at {scope_path}; run 'wraith scope add <target>' first")
+        return 2
+    spec = _scope_to_spec(config.load_scope(scope_path))
+    result = client.create_engagement(
+        grant, args.by or "operator", spec, ttl_minutes=int(args.hours * 60)
+    )
+    print(f"  engagement {result['id']} (expires {result.get('expires_at')})")
+    return 0
+
+
+def _runner_scan(client, grant: str, args) -> int:
+    if not args.engagement_id:
+        print("  --engagement <id> is required")
+        return 2
+    if not args.arg:
+        print("  a target is required")
+        return 2
+    token = config.load_token(args.token).to_dict() if args.token else None
+    result = client.create_scan(grant, args.engagement_id, args.arg, args.track, token=token)
+    print(f"  scan {result['id']} ({result.get('status')})")
+    return 0
+
+
+def _runner_status(client, grant: str, args) -> int:
+    if not args.arg:
+        print("  a scan id is required")
+        return 2
+    scan = client.get_scan(grant, args.arg)
+    print(f"  scan {scan['id']}: {scan['status']} ({len(scan.get('findings', []))} finding(s))")
+    return 0
+
+
+def _runner_scans(client, grant: str, args) -> int:
+    scans = client.list_scans(grant).get("scans", [])
+    if not scans:
+        print("  no scans")
+        return 0
+    for s in scans:
+        print(f"  {s['id']}: {s['status']} track={s.get('track')} target={s.get('target')}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="wraith", description="Full-spectrum offensive security platform")
     parser.add_argument("--version", action="version", version=f"WRAITH v{__version__}")
@@ -819,6 +936,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_auth.add_argument("--password", help="password (or WRAITH_PASSWORD, or prompt)")
     p_auth.add_argument("--code", help="TOTP code (for MFA-required logins)")
     p_auth.set_defaults(func=cmd_auth)
+
+    p_runner = sub.add_parser("runner", help="drive the Runner: engagements and scans (needs 'auth login')")
+    p_runner.add_argument("runner_action", choices=["engage", "scan", "status", "scans"])
+    p_runner.add_argument("arg", nargs="?", help="scan target (for scan) or scan id (for status)")
+    p_runner.add_argument("--runner", help="Runner base URL (default env WRAITH_RUNNER_URL)")
+    p_runner.add_argument("--authority", help="authority base URL (for grant refresh)")
+    p_runner.add_argument("--engagement", dest="engagement_id", help="engagement id (for scan)")
+    p_runner.add_argument("--track", default="sast", help="scan track (default sast)")
+    p_runner.add_argument("--token", help="approval token file (for a gated track)")
+    p_runner.add_argument("--scope", help="scope file (for engage; default config/scope.yaml)")
+    p_runner.add_argument("--by", help="authorizing operator (for engage)")
+    p_runner.add_argument("--hours", type=float, default=8.0, help="engagement lifetime in hours (for engage)")
+    p_runner.set_defaults(func=cmd_runner)
     return parser
 
 
