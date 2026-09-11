@@ -13,6 +13,7 @@ import os
 
 DB_URL_ENV = "WRAITH_RUNNER_DB_URL"
 PUBLIC_KEY_ENV = "WRAITH_ENTITLEMENT_PUBLIC_KEY"
+SIGNING_KEY_ENV = "WRAITH_RUNNER_SIGNING_KEY"
 _DEFAULT_DB_URL = "sqlite:///./runner.db"
 
 
@@ -41,3 +42,20 @@ def entitlement_public_key() -> bytes:
             "public key to verify grants."
         )
     return base64.urlsafe_b64decode(raw.strip())
+
+
+def signing_key() -> bytes:
+    """Return the HMAC key the Runner uses to sign engagements and verify approval
+    tokens, or raise.
+
+    Read from WRAITH_RUNNER_SIGNING_KEY (no default, fail closed). The Runner is the
+    only holder; it is distinct from the entitlement public key (grant verification)
+    and the result-store key.
+    """
+    raw = os.environ.get(SIGNING_KEY_ENV)
+    if not raw or not raw.strip():
+        raise RuntimeError(
+            f"{SIGNING_KEY_ENV} is not set. The Runner requires an engagement "
+            "signing key to sign engagements and verify approval tokens."
+        )
+    return raw.encode("utf-8")
