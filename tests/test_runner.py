@@ -12,8 +12,9 @@ from datetime import timedelta
 
 import pytest
 
-from adapters import AdapterResult, EngineAdapter, SubprocessResult
+from adapters import AdapterRequest, AdapterResult, EngineAdapter, SubprocessResult
 from entitlement import CapabilityGrant, encode_grant, generate_keypair, now_utc
+from supervisor import Job, Supervisor
 
 PRIV, PUB = generate_keypair()
 SIGN_KEY = b"runner-engagement-signing-key"
@@ -51,6 +52,21 @@ def _fake_adapters(track):
     return [_FakeScanAdapter()]
 
 
+class _FakeSandbox:
+    """Simulates hardware-isolated execution by running the adapters directly."""
+
+    def available(self):
+        return True, "ok"
+
+    def run(self, adapters, target, timeout_seconds):
+        jobs = [
+            Job(adapter=a, request=AdapterRequest(target=target, timeout_seconds=timeout_seconds))
+            for a in adapters
+        ]
+        results = Supervisor(max_parallel=1).run(jobs)
+        return [f for r in results for f in r.findings]
+
+
 @pytest.fixture
 def runner(tmp_path):
     from fastapi.testclient import TestClient
@@ -71,6 +87,7 @@ def runner(tmp_path):
         executor=InlineExecutor(),
         adapters_for=_fake_adapters,
         platform_key=PLATFORM_KEY,
+        sandbox=_FakeSandbox(),
     )
     return TestClient(app), factory
 
@@ -351,3 +368,96 @@ def test_run_scan_marks_killed_scan(runner):
     with factory() as s:
         scan = get_scan(s, "t-a", sid)
         assert scan is not None and scan.status == "killed"
+
+
+_EXPLOIT_CAPS = ("redteam_exploit", "control_plane_scan", "control_plane_read")
+
+
+def _token(engagement_id, target, action="exploit", hours=1.0):
+    from orchestrator import ApprovalToken
+
+    tok = ApprovalToken(
+        engagement_id=engagement_id,
+        action=action,
+        target=target,
+        expires_at=(now_utc() + timedelta(hours=hours)).isoformat(),
+    ).sign(SIGN_KEY)
+    return tok.to_dict()
+
+
+def _exploit_setup(client, tenant="t-a"):
+    hdr = {"Authorization": f"Bearer {_bearer(tenant=tenant, caps=_EXPLOIT_CAPS)}"}
+    created = client.post(
+        "/v1/engagements",
+        json={"authorized_by": "op", "scope": {"allowlist": {"domains": ["example.com"]}}},
+        headers=hdr,
+    )
+    return created.json()["id"], hdr
+
+
+def _exploit_body(eid, target, token):
+    return {"engagement_id": eid, "target": target, "track": "exploit", "token": token}
+
+
+def test_offensive_scan_with_valid_token_runs_in_sandbox(runner):
+    client, _ = runner
+    eid, hdr = _exploit_setup(client)
+    target = "https://example.com/x"
+    resp = client.post("/v1/scans", json=_exploit_body(eid, target, _token(eid, target)), headers=hdr)
+    assert resp.status_code == 200
+    got = client.get(f"/v1/scans/{resp.json()['id']}", headers=hdr).json()
+    assert got["status"] == "completed"
+    assert {f["finding_id"] for f in got["findings"]} == {"f1"}  # ran in the fake sandbox
+
+
+def test_offensive_scan_requires_token(runner):
+    client, _ = runner
+    eid, hdr = _exploit_setup(client)
+    resp = client.post(
+        "/v1/scans",
+        json={"engagement_id": eid, "target": "https://example.com/x", "track": "exploit"},
+        headers=hdr,
+    )
+    assert resp.status_code == 403
+
+
+def test_offensive_scan_rejects_replayed_token(runner):
+    client, _ = runner
+    eid, hdr = _exploit_setup(client)
+    target = "https://example.com/x"
+    tok = _token(eid, target)
+    assert client.post("/v1/scans", json=_exploit_body(eid, target, tok), headers=hdr).status_code == 200
+    assert client.post("/v1/scans", json=_exploit_body(eid, target, tok), headers=hdr).status_code == 403
+
+
+def test_offensive_scan_rejects_wrong_target_token(runner):
+    client, _ = runner
+    eid, hdr = _exploit_setup(client)
+    tok = _token(eid, "https://example.com/other")  # bound to a different target
+    body = _exploit_body(eid, "https://example.com/x", tok)
+    assert client.post("/v1/scans", json=body, headers=hdr).status_code == 403
+
+
+def test_offensive_scan_requires_redteam_capability(runner):
+    client, _ = runner
+    eid, _ = _exploit_setup(client)
+    scan_only = {"Authorization": f"Bearer {_bearer(caps=('control_plane_scan', 'control_plane_read'))}"}
+    target = "https://example.com/x"
+    body = _exploit_body(eid, target, _token(eid, target))
+    assert client.post("/v1/scans", json=body, headers=scan_only).status_code == 403
+
+
+def test_offensive_scan_fails_closed_without_sandbox(runner):
+    from runner.repository import get_scan
+    from runner.worker import CubeSandbox, run_scan
+
+    _client, factory = runner
+    sid = _seed(factory, "t-a", target="https://example.com/x", track="exploit")
+    # The real CubeSandbox reports unavailable here: the scan errors, no engine runs.
+    run_scan(
+        factory, "unused", RESULT_KEY, [_FakeScanAdapter()], "t-a", sid,
+        "https://example.com/x", sandbox=CubeSandbox(),
+    )
+    with factory() as s:
+        scan = get_scan(s, "t-a", sid)
+        assert scan is not None and scan.status == "error"

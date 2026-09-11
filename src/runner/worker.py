@@ -58,6 +58,27 @@ class BackgroundExecutor:
         self._pool.submit(fn)
 
 
+class Sandbox(Protocol):
+    def available(self) -> tuple[bool, str]: ...
+    def run(self, adapters: list[EngineAdapter], target: str, timeout_seconds: float) -> list[dict]: ...
+
+
+class CubeSandbox:
+    """Hardware-isolated execution (CubeSandbox on x86_64 Linux + KVM), one sandbox
+    per run, torn down after.
+
+    The live integration is a deployment step (it needs KVM and a pinned image
+    digest), so here it reports unavailable. That is the fail-closed default:
+    offensive engines never run outside isolation.
+    """
+
+    def available(self) -> tuple[bool, str]:
+        return False, "CubeSandbox not configured (needs x86_64 Linux + KVM and a pinned image)"
+
+    def run(self, adapters: list[EngineAdapter], target: str, timeout_seconds: float) -> list[dict]:
+        raise RuntimeError("CubeSandbox is not available in this environment")
+
+
 def default_adapters(track: str, engines_dir: str | Path) -> list[EngineAdapter]:
     """Build the defensive adapters for a track. Absent engines report UNAVAILABLE."""
     root = Path(engines_dir)
@@ -79,10 +100,14 @@ def run_scan(
     scan_id: str,
     target: str,
     timeout_seconds: float = 300.0,
+    sandbox: Sandbox | None = None,
 ) -> None:
     """Run the adapters, store findings per scan, and update the scan status.
 
-    A worker failure marks the scan errored; it never crashes the service.
+    A defensive scan runs the adapters directly. An offensive scan passes a sandbox:
+    the adapters run inside it, and if it is unavailable the scan fails closed (no
+    engine runs outside isolation). A worker failure marks the scan errored; it
+    never crashes the service.
     """
     with session_factory() as session:
         # A scan queued before a kill was engaged does not run: mark it killed.
@@ -93,12 +118,18 @@ def run_scan(
             return
     status = "completed"
     try:
-        jobs = [
-            Job(adapter=a, request=AdapterRequest(target=target, timeout_seconds=timeout_seconds))
-            for a in adapters
-        ]
-        results = Supervisor(max_parallel=2).run(jobs)
-        findings = [f for r in results for f in r.findings]
+        if sandbox is not None:
+            ok, reason = sandbox.available()
+            if not ok:
+                raise RuntimeError(f"sandbox unavailable: {reason}")
+            findings = sandbox.run(adapters, target, timeout_seconds)
+        else:
+            jobs = [
+                Job(adapter=a, request=AdapterRequest(target=target, timeout_seconds=timeout_seconds))
+                for a in adapters
+            ]
+            results = Supervisor(max_parallel=2).run(jobs)
+            findings = [f for r in results for f in r.findings]
         store = ResultStore(result_root, scan_id, result_key, actor=f"runner:{tenant_id}")
         for finding in findings:
             store.put_finding(finding)
