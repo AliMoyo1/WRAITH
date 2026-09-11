@@ -14,7 +14,11 @@ signs them, and the signing secret never reaches this service.
 
 from __future__ import annotations
 
+import json
+import uuid
+
 from fastapi import FastAPI, Header, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.orm import Session, sessionmaker
 
 from entitlement import CapabilityClass, CapabilityGrant, decode_grant
@@ -22,7 +26,9 @@ from entitlement import CapabilityClass, CapabilityGrant, decode_grant
 from . import repository
 from .config import database_url
 from .config import entitlement_public_key as _default_entitlement_public_key
+from .config import signing_key as _default_signing_key
 from .db import create_all, make_engine, make_session_factory
+from .engagements import build_engagement, engagement_from_row, scope_from_spec
 
 
 def _grant_from_header(authorization: str, public_key: bytes) -> CapabilityGrant:
@@ -49,9 +55,16 @@ def _require_class(grant: CapabilityGrant, capability_class: str) -> None:
         raise HTTPException(status_code=403, detail="insufficient capability")
 
 
+class EngagementCreate(BaseModel):
+    authorized_by: str
+    scope: dict
+    ttl_minutes: int = 480
+
+
 def create_app(
     session_factory: sessionmaker[Session] | None = None,
     entitlement_public_key: bytes | None = None,
+    signing_key: bytes | None = None,
 ) -> FastAPI:
     if session_factory is None:
         engine = make_engine(database_url())
@@ -62,6 +75,7 @@ def create_app(
         if entitlement_public_key is not None
         else _default_entitlement_public_key()
     )
+    sign_key = signing_key if signing_key is not None else _default_signing_key()
 
     app = FastAPI(title="WRAITH Runner", version="0.1.0")
     app.state.session_factory = session_factory
@@ -90,5 +104,73 @@ def create_app(
                 for s in repository.list_scans(session, grant.tenant_id)
             ]
         return {"scans": rows}
+
+    @app.post("/v1/engagements")
+    def engagement_create(
+        body: EngagementCreate, authorization: str = Header(default="")
+    ) -> dict[str, object]:
+        # Operator capability: authoring an engagement is a scan-initiating action,
+        # gated by control_plane_scan (held by Analyst and Operator, not Viewer).
+        grant = _grant_from_header(authorization, pub)
+        _require_class(grant, CapabilityClass.CONTROL_PLANE_SCAN.value)
+        scope = scope_from_spec(body.scope)
+        engagement = build_engagement(
+            uuid.uuid4().hex, body.authorized_by, scope, body.ttl_minutes, sign_key
+        )
+        assert engagement.signature is not None  # sign() set it
+        with session_factory() as session:
+            row = repository.create_engagement(
+                session,
+                engagement_id=engagement.id,
+                tenant_id=grant.tenant_id,
+                created_by=engagement.authorized_by,
+                scope_json=json.dumps(body.scope),
+                approved_at=engagement.approved_at,
+                expires_at=engagement.expires_at,
+                signature=engagement.signature,
+            )
+            payload: dict[str, object] = {
+                "id": row.id,
+                "expires_at": row.expires_at,
+                "open": row.open,
+            }
+        return payload
+
+    @app.get("/v1/engagements/{engagement_id}")
+    def engagement_get(
+        engagement_id: str, authorization: str = Header(default="")
+    ) -> dict[str, object]:
+        grant = _grant_from_header(authorization, pub)
+        _require_class(grant, CapabilityClass.CONTROL_PLANE_READ.value)
+        with session_factory() as session:
+            row = repository.get_engagement(session, grant.tenant_id, engagement_id)
+            if row is None:
+                raise HTTPException(status_code=404, detail="engagement not found")
+            # Enforced by the kernel's own Engagement: signature, expiry, open, scope.
+            ok, reason = engagement_from_row(row).is_valid(sign_key)
+            payload: dict[str, object] = {
+                "id": row.id,
+                "created_by": row.created_by,
+                "approved_at": row.approved_at,
+                "expires_at": row.expires_at,
+                "open": row.open,
+                "valid": ok,
+                "reason": reason,
+            }
+        return payload
+
+    @app.post("/v1/engagements/{engagement_id}/close")
+    def engagement_close(
+        engagement_id: str, authorization: str = Header(default="")
+    ) -> dict[str, object]:
+        grant = _grant_from_header(authorization, pub)
+        _require_class(grant, CapabilityClass.CONTROL_PLANE_SCAN.value)
+        with session_factory() as session:
+            row = repository.get_engagement(session, grant.tenant_id, engagement_id)
+            if row is None:
+                raise HTTPException(status_code=404, detail="engagement not found")
+            repository.close_engagement(session, row)
+            payload: dict[str, object] = {"id": row.id, "open": row.open}
+        return payload
 
     return app

@@ -15,6 +15,8 @@ import pytest
 from entitlement import CapabilityGrant, encode_grant, generate_keypair, now_utc
 
 PRIV, PUB = generate_keypair()
+SIGN_KEY = b"runner-engagement-signing-key"
+_SCAN_CAPS = ("control_plane_scan", "control_plane_read")
 
 
 @pytest.fixture
@@ -27,7 +29,7 @@ def runner(tmp_path):
     engine = make_engine(f"sqlite:///{tmp_path / 'runner.db'}")
     create_all(engine)
     factory = make_session_factory(engine)
-    app = create_app(session_factory=factory, entitlement_public_key=PUB)
+    app = create_app(session_factory=factory, entitlement_public_key=PUB, signing_key=SIGN_KEY)
     return TestClient(app), factory
 
 
@@ -112,3 +114,57 @@ def test_repository_list_is_tenant_scoped(runner):
     with factory() as s:
         assert [sc.tenant_id for sc in list_scans(s, "t-a")] == ["t-a"]
         assert [sc.tenant_id for sc in list_scans(s, "t-b")] == ["t-b"]
+
+
+def _create_engagement(client, tenant="t-a", domains=("example.com",)):
+    hdr = {"Authorization": f"Bearer {_bearer(tenant=tenant, caps=_SCAN_CAPS)}"}
+    body = {"authorized_by": "op@acme", "scope": {"allowlist": {"domains": list(domains)}}}
+    return client.post("/v1/engagements", json=body, headers=hdr), hdr
+
+
+def test_engagement_create_get_close(runner):
+    client, _ = runner
+    created, hdr = _create_engagement(client)
+    assert created.status_code == 200 and created.json()["open"] is True
+    eid = created.json()["id"]
+
+    got = client.get(f"/v1/engagements/{eid}", headers=hdr).json()
+    assert got["valid"] is True and got["open"] is True  # open, unexpired, signed
+
+    closed = client.post(f"/v1/engagements/{eid}/close", headers=hdr)
+    assert closed.status_code == 200 and closed.json()["open"] is False
+
+    after = client.get(f"/v1/engagements/{eid}", headers=hdr).json()
+    assert after["open"] is False and after["valid"] is False  # closed -> invalid
+
+
+def test_engagement_create_requires_scan_capability(runner):
+    client, _ = runner
+    # A read-only grant lacks control_plane_scan.
+    hdr = {"Authorization": f"Bearer {_bearer(caps=('control_plane_read',))}"}
+    resp = client.post(
+        "/v1/engagements", json={"authorized_by": "v", "scope": {"allowlist": {}}}, headers=hdr
+    )
+    assert resp.status_code == 403
+
+
+def test_engagement_tenant_isolation(runner):
+    client, _ = runner
+    created, _ = _create_engagement(client, tenant="t-a")
+    eid = created.json()["id"]
+    b = {"Authorization": f"Bearer {_bearer(tenant='t-b', caps=_SCAN_CAPS)}"}
+    a = {"Authorization": f"Bearer {_bearer(tenant='t-a', caps=_SCAN_CAPS)}"}
+    # Tenant B cannot see or close tenant A's engagement.
+    assert client.get(f"/v1/engagements/{eid}", headers=b).status_code == 404
+    assert client.post(f"/v1/engagements/{eid}/close", headers=b).status_code == 404
+    assert client.get(f"/v1/engagements/{eid}", headers=a).status_code == 200
+
+
+def test_consume_token_durable_single_use(runner):
+    from runner.repository import consume_token
+
+    _client, factory = runner
+    with factory() as s:
+        assert consume_token(s, "t-a", "nonce-1") is True
+        assert consume_token(s, "t-a", "nonce-1") is False  # replay refused, durable
+        assert consume_token(s, "t-b", "nonce-1") is True  # same nonce, other tenant, independent

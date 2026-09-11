@@ -8,7 +8,7 @@ per-tenant encrypted results are filled in over later sub-phases.
 
 from __future__ import annotations
 
-from sqlalchemy import String
+from sqlalchemy import String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base
@@ -31,3 +31,39 @@ class Scan(Base):
     track: Mapped[str] = mapped_column(String(32))
     status: Mapped[str] = mapped_column(String(32), default="queued")
     created_at: Mapped[str] = mapped_column(String(40))
+
+
+class Engagement(Base):
+    """A tenant-scoped, HMAC-signed authorization record for a set of scans.
+
+    Mirrors orchestrator.Engagement, which the Runner rehydrates to enforce it:
+    scope, approval and expiry, an open flag, and the signature over the immutable
+    fields. The scope is stored as the submitted JSON spec so it can be rebuilt
+    exactly (the signature covers the scope fingerprint). ``open`` is a
+    server-controlled column, so a client cannot flip a closed engagement open.
+    """
+
+    __tablename__ = "engagement"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), index=True)
+    created_by: Mapped[str] = mapped_column(String(255))
+    scope_json: Mapped[str] = mapped_column(Text)
+    approved_at: Mapped[str] = mapped_column(String(40))
+    expires_at: Mapped[str] = mapped_column(String(40))
+    open: Mapped[bool] = mapped_column(default=True)
+    signature: Mapped[str] = mapped_column(String(128))
+
+
+class ConsumedToken(Base):
+    """A spent single-use approval-token nonce, for durable replay refusal.
+
+    The (tenant_id, nonce) composite primary key makes consumption tenant-scoped: a
+    nonce spends once per tenant, and a second attempt fails to insert.
+    """
+
+    __tablename__ = "consumed_token"
+
+    tenant_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    nonce: Mapped[str] = mapped_column(String(64), primary_key=True)
+    consumed_at: Mapped[str] = mapped_column(String(40))
