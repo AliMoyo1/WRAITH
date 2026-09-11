@@ -65,6 +65,16 @@ external_tools:
     source: "https://www.shodan.io/"
     license: "Commercial API / ToS"
     bundled: false
+  trivy:
+    source: "https://github.com/aquasecurity/trivy"
+    license: "Apache-2.0"
+    bundled: false
+    note: "SARIF adapter, Layer 6 SAST_AGENTIC: filesystem/image vuln, secret, misconfig. Operator-installed, not bundled."
+  semgrep:
+    source: "https://github.com/semgrep/semgrep"
+    license: "LGPL-2.1"
+    bundled: false
+    note: "SARIF adapter, Layer 6 SAST_AGENTIC: multi-language static analysis. Operator-installed, not bundled."
 
 # Not a WRAITH engine. Recorded here so it is never mistaken for one.
 excluded:
