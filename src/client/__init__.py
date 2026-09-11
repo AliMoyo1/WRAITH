@@ -10,10 +10,13 @@ from .authclient import (
     refreshed,
     save_session,
 )
+from .runnerclient import RunnerClient, RunnerError
 
 __all__ = [
     "AuthClient",
     "AuthError",
+    "RunnerClient",
+    "RunnerError",
     "grant_expired",
     "load_session",
     "refreshed",
