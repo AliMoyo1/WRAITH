@@ -14,6 +14,7 @@ signs them, and the signing secret never reaches this service.
 
 from __future__ import annotations
 
+import hmac
 import json
 import uuid
 from collections.abc import Callable
@@ -31,6 +32,7 @@ from . import repository
 from .config import database_url
 from .config import engines_dir as _default_engines_dir
 from .config import entitlement_public_key as _default_entitlement_public_key
+from .config import platform_key as _default_platform_key
 from .config import result_key as _default_result_key
 from .config import results_root as _default_results_root
 from .config import signing_key as _default_signing_key
@@ -79,6 +81,14 @@ class ScanCreate(BaseModel):
 _TRACK_CLASS = {"sast": "control_plane_scan"}
 
 
+class KillRequest(BaseModel):
+    reset: bool = False
+
+
+def _platform_key_ok(provided: str, expected: bytes) -> bool:
+    return bool(provided) and hmac.compare_digest(provided.encode("utf-8"), expected)
+
+
 def create_app(
     session_factory: sessionmaker[Session] | None = None,
     entitlement_public_key: bytes | None = None,
@@ -87,6 +97,7 @@ def create_app(
     result_root: str | Path | None = None,
     executor: Executor | None = None,
     adapters_for: Callable[[str], list[EngineAdapter]] | None = None,
+    platform_key: bytes | None = None,
 ) -> FastAPI:
     if session_factory is None:
         engine = make_engine(database_url())
@@ -104,6 +115,7 @@ def create_app(
     build_adapters = adapters_for or (
         lambda track: default_adapters(track, _default_engines_dir())
     )
+    plat_key = platform_key if platform_key is not None else _default_platform_key()
 
     app = FastAPI(title="WRAITH Runner", version="0.1.0")
     app.state.session_factory = session_factory
@@ -212,6 +224,8 @@ def create_app(
             raise HTTPException(status_code=400, detail=f"unsupported track: {body.track}")
         _require_class(grant, capability)
         with session_factory() as session:
+            if repository.is_killed(session, grant.tenant_id):
+                raise HTTPException(status_code=503, detail="kill-switch engaged")
             row = repository.get_engagement(session, grant.tenant_id, body.engagement_id)
             if row is None:
                 raise HTTPException(status_code=404, detail="engagement not found")
@@ -261,5 +275,36 @@ def create_app(
         store = ResultStore(rroot, scan_id, rkey, actor=f"runner:{grant.tenant_id}")
         meta["findings"] = [store.get_finding(fid) for fid in store.list_findings()]
         return meta
+
+    @app.post("/v1/kill")
+    def kill_tenant(
+        body: KillRequest, authorization: str = Header(default="")
+    ) -> dict[str, object]:
+        # Per-tenant emergency stop, on the caller's own tenant only.
+        grant = _grant_from_header(authorization, pub)
+        _require_class(grant, "control_plane_scan")
+        with session_factory() as session:
+            if body.reset:
+                repository.clear_kill(session, grant.tenant_id)
+            else:
+                repository.engage_kill(session, grant.tenant_id)
+            killed = repository.is_killed(session, grant.tenant_id)
+        return {"scope": "tenant", "tenant_id": grant.tenant_id, "killed": killed}
+
+    @app.post("/v1/admin/kill")
+    def kill_global(
+        body: KillRequest, x_platform_key: str = Header(default="")
+    ) -> dict[str, object]:
+        # Platform-operator emergency stop, out of band from tenant entitlement so
+        # one tenant can never halt the whole platform.
+        if not _platform_key_ok(x_platform_key, plat_key):
+            raise HTTPException(status_code=401, detail="invalid platform key")
+        with session_factory() as session:
+            if body.reset:
+                repository.clear_kill(session, "global")
+            else:
+                repository.engage_kill(session, "global")
+            killed = repository.is_killed(session, "global")
+        return {"scope": "global", "killed": killed}
 
     return app

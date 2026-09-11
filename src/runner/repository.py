@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from .models import ConsumedToken, Engagement, Scan
+from .models import ConsumedToken, Engagement, KillSwitch, Scan
 
 
 def create_scan(
@@ -109,3 +109,28 @@ def set_scan_status(
     if finished_at is not None:
         scan.finished_at = finished_at
     session.commit()
+
+
+_GLOBAL_KILL = "global"
+
+
+def engage_kill(session: Session, scope: str) -> None:
+    """Engage the kill-switch for a scope ("global" or a tenant id). Idempotent."""
+    if session.get(KillSwitch, scope) is None:
+        session.add(KillSwitch(scope=scope, engaged_at=datetime.now(UTC).isoformat()))
+        session.commit()
+
+
+def clear_kill(session: Session, scope: str) -> None:
+    """Clear the kill-switch for a scope. Idempotent."""
+    row = session.get(KillSwitch, scope)
+    if row is not None:
+        session.delete(row)
+        session.commit()
+
+
+def is_killed(session: Session, tenant_id: str) -> bool:
+    """True when the global kill is engaged or this tenant's kill is engaged."""
+    if session.get(KillSwitch, _GLOBAL_KILL) is not None:
+        return True
+    return session.get(KillSwitch, tenant_id) is not None
