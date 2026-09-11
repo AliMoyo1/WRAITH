@@ -84,6 +84,13 @@ def run_scan(
 
     A worker failure marks the scan errored; it never crashes the service.
     """
+    with session_factory() as session:
+        # A scan queued before a kill was engaged does not run: mark it killed.
+        if repository.is_killed(session, tenant_id):
+            scan = repository.get_scan(session, tenant_id, scan_id)
+            if scan is not None:
+                repository.set_scan_status(session, scan, "killed", datetime.now(UTC).isoformat())
+            return
     status = "completed"
     try:
         jobs = [

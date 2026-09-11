@@ -92,3 +92,21 @@ def engines_dir() -> str:
     """Directory the operator installs the cloned engines under, server-side."""
     raw = os.environ.get(ENGINES_DIR_ENV)
     return raw.strip() if raw and raw.strip() else _DEFAULT_ENGINES_DIR
+
+
+PLATFORM_KEY_ENV = "WRAITH_RUNNER_PLATFORM_KEY"
+
+
+def platform_key() -> bytes:
+    """Return the platform-operator key for the global kill-switch, or raise.
+
+    No default (fail closed). Held by the Runner operator, out of band from the
+    tenant entitlement, so one tenant can never halt the whole platform.
+    """
+    raw = os.environ.get(PLATFORM_KEY_ENV)
+    if not raw or not raw.strip():
+        raise RuntimeError(
+            f"{PLATFORM_KEY_ENV} is not set. The Runner requires a platform-operator "
+            "key for the global kill-switch."
+        )
+    return raw.encode("utf-8")

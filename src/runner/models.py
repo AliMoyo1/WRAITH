@@ -68,3 +68,15 @@ class ConsumedToken(Base):
     tenant_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     nonce: Mapped[str] = mapped_column(String(64), primary_key=True)
     consumed_at: Mapped[str] = mapped_column(String(40))
+
+
+class KillSwitch(Base):
+    """Control-plane kill state. A row means killed for its scope: the literal
+    "global" (all tenants) or a tenant id (that tenant only). Engage inserts, reset
+    deletes. Durable, so it survives restarts and every worker sees it.
+    """
+
+    __tablename__ = "kill_switch"
+
+    scope: Mapped[str] = mapped_column(String(64), primary_key=True)
+    engaged_at: Mapped[str] = mapped_column(String(40))

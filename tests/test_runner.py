@@ -18,6 +18,7 @@ from entitlement import CapabilityGrant, encode_grant, generate_keypair, now_utc
 PRIV, PUB = generate_keypair()
 SIGN_KEY = b"runner-engagement-signing-key"
 RESULT_KEY = b"runner-result-master-key"
+PLATFORM_KEY = b"platform-operator-key"
 _SCAN_CAPS = ("control_plane_scan", "control_plane_read")
 
 
@@ -69,6 +70,7 @@ def runner(tmp_path):
         result_root=tmp_path / "results",
         executor=InlineExecutor(),
         adapters_for=_fake_adapters,
+        platform_key=PLATFORM_KEY,
     )
     return TestClient(app), factory
 
@@ -288,3 +290,64 @@ def test_scan_unsupported_track(runner):
         headers=hdr,
     )
     assert resp.status_code == 400  # dynamic/offensive tracks are not yet server-side
+
+
+def _scan_body(eid):
+    return {"engagement_id": eid, "target": "https://example.com/x", "track": "sast"}
+
+
+def test_per_tenant_kill_blocks_and_resets(runner):
+    client, _ = runner
+    created, hdr = _create_engagement(client)
+    body = _scan_body(created.json()["id"])
+    assert client.post("/v1/kill", json={}, headers=hdr).json()["killed"] is True
+    assert client.post("/v1/scans", json=body, headers=hdr).status_code == 503
+    assert client.post("/v1/kill", json={"reset": True}, headers=hdr).json()["killed"] is False
+    assert client.post("/v1/scans", json=body, headers=hdr).status_code == 200
+
+
+def test_per_tenant_kill_is_isolated(runner):
+    client, _ = runner
+    a_created, a_hdr = _create_engagement(client, tenant="t-a")
+    b_created, b_hdr = _create_engagement(client, tenant="t-b")
+    client.post("/v1/kill", json={}, headers=a_hdr)  # kill tenant A only
+    assert client.post("/v1/scans", json=_scan_body(a_created.json()["id"]), headers=a_hdr).status_code == 503
+    assert client.post("/v1/scans", json=_scan_body(b_created.json()["id"]), headers=b_hdr).status_code == 200
+
+
+def test_kill_requires_scan_capability(runner):
+    client, _ = runner
+    ro = {"Authorization": f"Bearer {_bearer(caps=('control_plane_read',))}"}
+    assert client.post("/v1/kill", json={}, headers=ro).status_code == 403
+
+
+def test_global_kill_blocks_all_tenants(runner):
+    client, _ = runner
+    a_created, a_hdr = _create_engagement(client, tenant="t-a")
+    b_created, b_hdr = _create_engagement(client, tenant="t-b")
+    pk = {"X-Platform-Key": PLATFORM_KEY.decode()}
+    assert client.post("/v1/admin/kill", json={}, headers=pk).json()["killed"] is True
+    assert client.post("/v1/scans", json=_scan_body(a_created.json()["id"]), headers=a_hdr).status_code == 503
+    assert client.post("/v1/scans", json=_scan_body(b_created.json()["id"]), headers=b_hdr).status_code == 503
+    client.post("/v1/admin/kill", json={"reset": True}, headers=pk)
+    assert client.post("/v1/scans", json=_scan_body(a_created.json()["id"]), headers=a_hdr).status_code == 200
+
+
+def test_global_kill_requires_platform_key(runner):
+    client, _ = runner
+    assert client.post("/v1/admin/kill", json={}).status_code == 401
+    assert client.post("/v1/admin/kill", json={}, headers={"X-Platform-Key": "wrong"}).status_code == 401
+
+
+def test_run_scan_marks_killed_scan(runner):
+    from runner.repository import engage_kill, get_scan
+    from runner.worker import run_scan
+
+    _client, factory = runner
+    sid = _seed(factory, "t-a", target="https://example.com/x")  # a queued scan
+    with factory() as s:
+        engage_kill(s, "t-a")
+    run_scan(factory, "unused", RESULT_KEY, [_FakeScanAdapter()], "t-a", sid, "https://example.com/x")
+    with factory() as s:
+        scan = get_scan(s, "t-a", sid)
+        assert scan is not None and scan.status == "killed"
