@@ -109,9 +109,10 @@ Rules:
   taxonomy, where `sqlmap` is already `exploit_sqlmap`, layer 8, gated.
 - Connect-time scope: `_authorize_scan` checks scope once at intake. Active tools can
   expand what they touch (Nmap on a CIDR, Nuclei across hosts, ZAP spidering to new
-  links). Decision needed (section 12): either bound these adapters to a single
-  in-scope host per run, or add a real per-connection scope guard. Do not rely on the
-  one-shot intake check alone for the network/web tools.
+  links). Decision (section 12): each active adapter is bound to a single in-scope
+  host per run to start and rejects multi-host or CIDR targets; a per-connection scope
+  guard is a later change. Do not rely on the one-shot intake check alone for the
+  network/web tools.
 
 ## 4. Finding normalization rules (schema-accurate)
 
@@ -276,7 +277,7 @@ Per adapter, following `tests/test_adapters.py`:
 4. Nuclei (probe; scope discipline).
 5. ZAP passive + spider (bounded to scope).
 6. SQLMap and ZAP active: `Track.EXPLOITATION`, `engine run` token gate, not
-   auto-run. Built last, ideally once the Runner provides per-run isolation.
+   auto-run. Deferred until the Runner provides per-run isolation (decision 2).
 
 ## 11. Acceptance (per phase)
 
@@ -287,15 +288,19 @@ Per adapter, following `tests/test_adapters.py`:
   `--track all`; exploitation engines never appear in a scan selection.
 - Config and taxonomy updated without duplicate keys or clobbered domains.
 
-## 12. Open decisions (need your call)
+## 12. Decisions (adopted 2026-09-11)
 
-1. Exploitation gating: confirm SQLMap and ZAP-active are excluded from `scan`
-   auto-select and run only via a token-gated `engine run` (recommended).
-2. Local CLI now vs land with the Runner's server-side worker. Recommended: build
-   WS0 through Nuclei locally now; hold SQLMap/ZAP-active until the Runner can isolate
-   them.
-3. Connect-time scope for active tools: bound each active adapter to a single in-scope
-   host per run initially (simplest, safe), or design a per-connection scope guard.
-   Recommended: single-host bound first, guard later.
-4. Trivy taxonomy: add a distinct `dependency_vulns`/`container_scan` domain rather
-   than reassigning `supply_chain` from skillspector (recommended).
+All four adopted as recommended.
+
+1. Exploitation gating: SQLMap and ZAP active-scan are excluded from `scan`
+   auto-select and run only via a token-gated `engine run` (`Track.EXPLOITATION` plus
+   a single-use approval token). No exploitation engine is ever auto-run.
+2. Sequencing: build WS0 through Nuclei (phases 1-4) on the local CLI now; hold
+   SQLMap and ZAP active-scan (phase 6) until the Runner's server-side worker can
+   isolate them per run. ZAP passive (phase 5) may land locally.
+3. Connect-time scope: each active adapter (Nmap, Nuclei, ZAP) is bound to a single
+   in-scope host per run to start, and rejects multi-host or CIDR targets; a
+   per-connection scope guard is deferred to a later change.
+4. Trivy taxonomy: add a distinct detection domain (`dependency_vulns` or
+   `container_scan`, engine `trivy`) rather than reassigning `supply_chain` from
+   skillspector.
