@@ -147,6 +147,8 @@ def _authorize_scan(
 
 def cmd_scan(args) -> int:
     logger = get_logger("wraith.scan")
+    if getattr(args, "preview", False):
+        return _preview_scan(args)
     if _KILL_FLAG.exists():
         print("kill-switch engaged; run 'wraith kill --reset' to clear")
         return 3
@@ -909,6 +911,119 @@ def _evidence_verify(args) -> int:
     return 0 if ok else 2
 
 
+def _preview_scan(args) -> int:
+    """Outbound-data preview: what a scan would send, without running any engine."""
+    target = args.target
+    kind = classify_target(target)
+    print(f"  target: {target}  (kind={kind}, track={args.track})")
+    scope_path = _scope_path(args)
+    if scope_path.exists():
+        scope = config.load_scope(scope_path)
+        verdict = "IN SCOPE" if scope.allows(target) else "OUT OF SCOPE"
+        print(f"  scope: {verdict} (enabled={scope.enabled})")
+    else:
+        print(f"  scope: no scope file at {scope_path}")
+    if _KILL_FLAG.exists():
+        print("  kill-switch: ENGAGED (a real scan would refuse)")
+    names = _adapters_for(args.track, target)
+    if not names:
+        print("  engines: none apply to this target and track")
+    for name in names:
+        adapter, _err = _build_adapter(name)
+        available = adapter is not None and adapter.is_available()[0]
+        print(f"  engine {name}: would run ({'available' if available else 'unavailable'})")
+    if kind == "repo_path":
+        print("  outbound: reads the local path only; no network egress")
+    else:
+        print(f"  outbound: the engines above send probes to {target}")
+    print("  findings: stored locally and encrypted; nothing is sent to third parties")
+    return 0
+
+
+def cmd_doctor(args) -> int:
+    """Local readiness diagnostic: keys, scope, engagement, kill-switch, engines, session.
+
+    Read-only: it inspects local configuration and never runs an engine or touches the
+    network. Exit 0 unless a check is an error.
+    """
+    checks: list[tuple[str, str, str]] = []
+
+    for env_name, purpose in (
+        (config.SIGNING_KEY_ENV, "engagement signing"),
+        (config.RESULT_KEY_ENV, "result-store encryption"),
+    ):
+        ok = bool(os.environ.get(env_name))
+        checks.append(("OK" if ok else "WARN", env_name, "set" if ok else f"not set ({purpose})"))
+
+    scope_path = _scope_path(args)
+    if not scope_path.exists():
+        checks.append(("WARN", "scope", f"no scope file at {scope_path}"))
+    else:
+        try:
+            scope = config.load_scope(scope_path)
+        except Exception as exc:  # a diagnostic reports parse failures, never raises
+            checks.append(("ERROR", "scope", f"cannot parse {scope_path}: {exc}"))
+        else:
+            entries = (
+                len(scope.allow.domains) + len(scope.allow.cidrs)
+                + len(scope.allow.urls) + len(scope.allow.repo_paths)
+            )
+            if not scope.enabled:
+                checks.append(("WARN", "scope", "present but disabled (fail-closed)"))
+            elif entries == 0:
+                checks.append(("WARN", "scope", "enabled but the allowlist is empty"))
+            else:
+                checks.append(("OK", "scope", f"enabled, {entries} allowlist entries"))
+
+    engage_path = Path(getattr(args, "engagement_file", None) or _DEFAULT_ENGAGE)
+    if not engage_path.exists():
+        checks.append(("WARN", "engagement", "none (scans run ephemerally, not persisted)"))
+    else:
+        try:
+            eng = config.load_engagement(engage_path)
+        except Exception as exc:
+            checks.append(("ERROR", "engagement", f"cannot parse {engage_path}: {exc}"))
+        else:
+            try:
+                key = config.signing_key()
+            except RuntimeError:
+                checks.append(("WARN", "engagement", "present but WRAITH_SIGNING_KEY unset; cannot verify"))
+            else:
+                ok, reason = eng.is_valid(key)
+                checks.append(("OK" if ok else "ERROR", "engagement", reason))
+
+    checks.append(
+        ("WARN", "kill-switch", "ENGAGED (run 'wraith kill --reset')")
+        if _KILL_FLAG.exists()
+        else ("OK", "kill-switch", "clear")
+    )
+
+    for name in sorted(ADAPTERS):
+        adapter, err = _build_adapter(name)
+        if adapter is None:
+            checks.append(("WARN", f"engine:{name}", err or "unavailable"))
+        else:
+            ok, reason = adapter.is_available()
+            checks.append(("OK" if ok else "WARN", f"engine:{name}", reason))
+
+    from client import grant_expired, load_session
+
+    session = load_session(_SESSION_PATH)
+    if session is None:
+        checks.append(("WARN", "auth", "not logged in (run 'wraith auth login')"))
+    else:
+        expired = grant_expired(session)
+        checks.append(("WARN" if expired else "OK", "auth", "grant expired" if expired else "logged in"))
+
+    marks = {"OK": "ok  ", "WARN": "warn", "ERROR": "ERR "}
+    for level, name, detail in checks:
+        print(f"  [{marks[level]}] {name}: {detail}")
+    errors = sum(1 for level, _, _ in checks if level == "ERROR")
+    warnings = sum(1 for level, _, _ in checks if level == "WARN")
+    print(f"  summary: {errors} error(s), {warnings} warning(s)")
+    return 1 if errors else 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="wraith", description="Full-spectrum offensive security platform")
     parser.add_argument("--version", action="version", version=f"WRAITH v{__version__}")
@@ -918,6 +1033,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_scan.add_argument("target")
     p_scan.add_argument("--track", choices=["web", "api", "network", "cloud", "sast", "agentic", "all"], default="all")
     p_scan.add_argument("--dry-run", action="store_true", help="authorize only, no engine execution")
+    p_scan.add_argument("--preview", action="store_true", help="preview what the scan would send; run no engines")
     p_scan.add_argument("--scope", help="path to scope file (default config/scope.yaml)")
     p_scan.add_argument("--engagement-file", dest="engagement_file", help="engagement record file")
     p_scan.add_argument("--report", help="write findings to this JSON path")
@@ -1003,6 +1119,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_evidence.add_argument("evidence_action", choices=["verify"])
     p_evidence.add_argument("file", nargs="?", help="path to the bundle JSON")
     p_evidence.set_defaults(func=cmd_evidence)
+
+    p_doctor = sub.add_parser("doctor", help="check local readiness: keys, scope, engagement, engines")
+    p_doctor.add_argument("--scope", help="path to scope file (default config/scope.yaml)")
+    p_doctor.add_argument("--engagement-file", dest="engagement_file", help="engagement record file")
+    p_doctor.set_defaults(func=cmd_doctor)
     return parser
 
 
