@@ -25,7 +25,9 @@ from .policy import (
     Role,
     Tier,
     capabilities_for,
+    entitlement_matrix,
     require_entitlement,
+    tier_meets,
 )
 from .recommend import analyze_grant, minimal_roles_tier
 
@@ -39,11 +41,13 @@ __all__ = [
     "capabilities_for",
     "decode_grant",
     "encode_grant",
+    "entitlement_matrix",
     "generate_keypair",
     "minimal_roles_tier",
     "now_utc",
     "public_from_private",
     "require_entitlement",
     "sign_bytes",
+    "tier_meets",
     "verify_bytes",
 ]
