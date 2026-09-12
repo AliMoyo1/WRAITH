@@ -1024,6 +1024,45 @@ def cmd_doctor(args) -> int:
     return 1 if errors else 0
 
 
+def cmd_entitlement(args) -> int:
+    """Least-privilege analysis over roles and tiers."""
+    if args.entitlement_action == "recommend":
+        return _entitlement_recommend(args)
+    print("Subcommands: recommend")
+    return 2
+
+
+def _entitlement_recommend(args) -> int:
+    from entitlement import analyze_grant, minimal_roles_tier
+
+    needed = [c.strip() for c in (args.needed or "").split(",") if c.strip()]
+    if not needed:
+        print("  supply --needed <comma-separated capability classes>")
+        return 2
+    if bool(args.roles) != bool(args.tier):
+        print("  provide both --roles and --tier to analyze a current grant")
+        return 2
+    try:
+        if args.roles:
+            roles = [r.strip() for r in args.roles.split(",") if r.strip()]
+            report = analyze_grant(roles, args.tier, needed)
+        else:
+            rec = minimal_roles_tier(needed)
+            report = {
+                "needed": sorted(needed),
+                "recommended_roles": sorted(r.value for r in rec[0]) if rec else None,
+                "recommended_tier": rec[1].value if rec else None,
+            }
+    except ValueError as exc:
+        print(f"  invalid role or tier: {exc}")
+        return 2
+    for key, value in report.items():
+        print(f"  {key}: {value}")
+    if report.get("recommended_roles") is None:
+        print("  note: some needed classes are not grantable by any role or tier")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="wraith", description="Full-spectrum offensive security platform")
     parser.add_argument("--version", action="version", version=f"WRAITH v{__version__}")
@@ -1124,6 +1163,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_doctor.add_argument("--scope", help="path to scope file (default config/scope.yaml)")
     p_doctor.add_argument("--engagement-file", dest="engagement_file", help="engagement record file")
     p_doctor.set_defaults(func=cmd_doctor)
+
+    p_ent = sub.add_parser("entitlement", help="least-privilege recommendations over roles and tiers")
+    p_ent.add_argument("entitlement_action", choices=["recommend"])
+    p_ent.add_argument("--needed", help="comma-separated capability classes the principal needs")
+    p_ent.add_argument("--roles", help="comma-separated current roles (with --tier, to analyze)")
+    p_ent.add_argument("--tier", help="current tier (with --roles)")
+    p_ent.set_defaults(func=cmd_entitlement)
     return parser
 
 

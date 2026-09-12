@@ -27,6 +27,7 @@ from .policy import (
     capabilities_for,
     require_entitlement,
 )
+from .recommend import analyze_grant, minimal_roles_tier
 
 __all__ = [
     "CapabilityClass",
@@ -34,10 +35,12 @@ __all__ = [
     "EntitlementError",
     "Role",
     "Tier",
+    "analyze_grant",
     "capabilities_for",
     "decode_grant",
     "encode_grant",
     "generate_keypair",
+    "minimal_roles_tier",
     "now_utc",
     "public_from_private",
     "require_entitlement",
