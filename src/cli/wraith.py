@@ -88,6 +88,14 @@ _TRACK_DOMAINS = {
 # Domains that operate on a static target (a local repo path) rather than a live host.
 _STATIC_DOMAINS = {"sast", "agentic"}
 
+# Engines that make third-party network calls even on a local path scan (they fetch
+# rules or vulnerability databases from their vendors). Surfaced by the outbound
+# preview so a repo scan is not wrongly described as having no egress.
+_ENGINE_NETWORK = {
+    "semgrep": "downloads rules from the Semgrep registry (--config auto)",
+    "trivy": "downloads vulnerability and check databases",
+}
+
 
 def _adapters_for(track: str, target: str) -> list[str]:
     kind = classify_target(target)
@@ -826,9 +834,8 @@ def _runner_engage(client, grant: str, args) -> int:
         print(f"  no scope file at {scope_path}; run 'wraith scope add <target>' first")
         return 2
     spec = _scope_to_spec(config.load_scope(scope_path))
-    result = client.create_engagement(
-        grant, args.by or "operator", spec, ttl_minutes=int(args.hours * 60)
-    )
+    # The approver identity is derived server-side from the verified grant.
+    result = client.create_engagement(grant, spec, ttl_minutes=int(args.hours * 60))
     print(f"  engagement {result['id']} (expires {result.get('expires_at')})")
     return 0
 
@@ -933,10 +940,17 @@ def _preview_scan(args) -> int:
         available = adapter is not None and adapter.is_available()[0]
         print(f"  engine {name}: would run ({'available' if available else 'unavailable'})")
     if kind == "repo_path":
-        print("  outbound: reads the local path only; no network egress")
+        print("  outbound: reads the local path; its contents are not uploaded")
     else:
         print(f"  outbound: the engines above send probes to {target}")
-    print("  findings: stored locally and encrypted; nothing is sent to third parties")
+    # Some static engines still make third-party calls even on a local path scan:
+    # they download rules or vulnerability databases from their vendors.
+    net_engines = [n for n in names if n in _ENGINE_NETWORK]
+    for name in net_engines:
+        print(f"  network: {name} {_ENGINE_NETWORK[name]}")
+    if kind == "repo_path" and net_engines:
+        print("  note: those fetches are third-party network calls; run engines offline to avoid them")
+    print("  findings: stored locally and encrypted; results are not sent to third parties")
     return 0
 
 

@@ -13,6 +13,7 @@ tracks and their engines land in sub-phase 6.
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -104,6 +105,26 @@ def default_adapters(track: str, engines_dir: str | Path) -> list[EngineAdapter]
     return []
 
 
+def _derive_status(results: list[AdapterResult]) -> str:
+    """Map per-engine results to a scan status.
+
+    completed = every engine ran (OK); partial = some ran, some did not;
+    not_evaluated = nothing ran or every engine was unavailable; failed = none ran and
+    at least one errored or timed out. A worker exception is reported as "error" by the
+    caller, and a killed scan as "killed"; neither is derived here.
+    """
+    if not results:
+        return "not_evaluated"
+    ok = [r for r in results if r.status == "OK"]
+    if len(ok) == len(results):
+        return "completed"
+    if ok:
+        return "partial"
+    if any(r.status in ("ERROR", "TIMEOUT") for r in results):
+        return "failed"
+    return "not_evaluated"  # all UNAVAILABLE
+
+
 def run_scan(
     session_factory: sessionmaker[Session],
     result_root: str | Path,
@@ -130,7 +151,8 @@ def run_scan(
             if scan is not None:
                 repository.set_scan_status(session, scan, "killed", datetime.now(UTC).isoformat())
             return
-    status = "completed"
+    status = "error"  # a worker exception leaves this; success derives it from results
+    engines_json: str | None = None
     try:
         if sandbox is not None:
             ok, reason = sandbox.available()
@@ -143,20 +165,24 @@ def run_scan(
                 for a in adapters
             ]
             results = Supervisor(max_parallel=2).run(jobs)
+        # Per-engine coverage, recorded on the scan and in the evidence bundle so an
+        # unavailable or errored engine is never silently reported as completed coverage.
+        engines = [
+            {
+                "name": r.engine,
+                "version": r.engine_version,
+                "status": r.status,
+                "coverage": r.coverage.get("status"),
+            }
+            for r in results
+        ]
+        status = _derive_status(results)
+        engines_json = json.dumps(engines)
         findings = [f for r in results for f in r.findings]
         store = ResultStore(result_root, scan_id, result_key, actor=f"runner:{tenant_id}")
         for finding in findings:
             store.put_finding(finding)
         if evidence is not None:
-            engines = [
-                {
-                    "name": r.engine,
-                    "version": r.engine_version,
-                    "status": r.status,
-                    "coverage": r.coverage.get("status"),
-                }
-                for r in results
-            ]
             bundle = build_bundle(
                 evidence.engagement, evidence.entitlement, engines, findings
             ).sign(evidence.key)
@@ -167,4 +193,6 @@ def run_scan(
     with session_factory() as session:
         scan = repository.get_scan(session, tenant_id, scan_id)
         if scan is not None:
-            repository.set_scan_status(session, scan, status, datetime.now(UTC).isoformat())
+            repository.set_scan_status(
+                session, scan, status, datetime.now(UTC).isoformat(), engines_json
+            )

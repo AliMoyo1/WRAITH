@@ -32,6 +32,10 @@ class Scan(Base):
     status: Mapped[str] = mapped_column(String(32), default="queued")
     created_at: Mapped[str] = mapped_column(String(40))
     finished_at: Mapped[str | None] = mapped_column(String(40), nullable=True, default=None)
+    # Per-engine coverage summary as JSON: [{name, version, status, coverage}, ...].
+    # Set when the worker finishes so the scan API can report which engines ran, were
+    # unavailable, or errored, rather than collapsing everything into a single status.
+    engines_json: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
 
 
 class Engagement(Base):

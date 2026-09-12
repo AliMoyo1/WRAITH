@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from adapters import EngineAdapter
 from entitlement import CapabilityClass, CapabilityGrant, decode_grant
 from evidence import signing_key_optional
+from orchestrator.scope import classify_target
 from store import ResultStore
 
 from . import repository
@@ -37,8 +38,16 @@ from .config import platform_key as _default_platform_key
 from .config import result_key as _default_result_key
 from .config import results_root as _default_results_root
 from .config import signing_key as _default_signing_key
+from .config import workspace_root as _default_workspace_root
 from .db import create_all, make_engine, make_session_factory
-from .engagements import build_engagement, engagement_from_row, scope_from_spec
+from .engagements import (
+    build_engagement,
+    engagement_from_row,
+    offending_scope_paths,
+    path_in_workspace,
+    scope_from_spec,
+    workspace_for,
+)
 from .tokens import TokenError, consume_approval_token
 from .worker import (
     BackgroundExecutor,
@@ -76,7 +85,8 @@ def _require_class(grant: CapabilityGrant, capability_class: str) -> None:
 
 
 class EngagementCreate(BaseModel):
-    authorized_by: str
+    # No authorized_by: the approver identity is taken from the verified grant, never
+    # from client input, so an engagement cannot be self-approved under a spoofed name.
     scope: dict
     ttl_minutes: int = 480
 
@@ -113,6 +123,7 @@ def create_app(
     platform_key: bytes | None = None,
     sandbox: Sandbox | None = None,
     evidence_key: bytes | None = None,
+    workspace_root: str | Path | None = None,
 ) -> FastAPI:
     if session_factory is None:
         engine = make_engine(database_url())
@@ -132,6 +143,7 @@ def create_app(
     )
     plat_key = platform_key if platform_key is not None else _default_platform_key()
     scan_sandbox = sandbox if sandbox is not None else CubeSandbox()
+    ws_root = Path(workspace_root) if workspace_root is not None else Path(_default_workspace_root())
     # Evidence production is optional: enabled when a signing key is configured.
     ev_key = evidence_key if evidence_key is not None else signing_key_optional()
 
@@ -167,13 +179,24 @@ def create_app(
     def engagement_create(
         body: EngagementCreate, authorization: str = Header(default="")
     ) -> dict[str, object]:
-        # Operator capability: authoring an engagement is a scan-initiating action,
-        # gated by control_plane_scan (held by Analyst and Operator, not Viewer).
+        # Engagement authoring is Operator-only (control_plane_engage), separate from
+        # running scans (control_plane_scan): an Analyst cannot self-approve one.
         grant = _grant_from_header(authorization, pub)
-        _require_class(grant, CapabilityClass.CONTROL_PLANE_SCAN.value)
+        _require_class(grant, CapabilityClass.CONTROL_PLANE_ENGAGE.value)
+        # Repository paths in scope must resolve within this tenant's workspace, so a
+        # scan cannot be authorized against arbitrary host paths the service can read.
+        workspace = workspace_for(ws_root, grant.tenant_id)
+        offending = offending_scope_paths(body.scope, workspace)
+        if offending:
+            raise HTTPException(
+                status_code=400,
+                detail=f"scope repository paths outside the tenant workspace: {offending}",
+            )
+        # The approver identity is the verified principal, never client input.
+        authorized_by = grant.principal_id
         scope = scope_from_spec(body.scope)
         engagement = build_engagement(
-            uuid.uuid4().hex, body.authorized_by, scope, body.ttl_minutes, sign_key
+            uuid.uuid4().hex, authorized_by, scope, body.ttl_minutes, sign_key
         )
         assert engagement.signature is not None  # sign() set it
         with session_factory() as session:
@@ -254,6 +277,15 @@ def create_app(
                 raise HTTPException(status_code=403, detail=f"engagement invalid: {reason}")
             if not engagement.scope.allows(body.target):
                 raise HTTPException(status_code=403, detail="target not in engagement scope")
+            # Defense in depth: a repository-path target must resolve within the tenant
+            # workspace, not merely be in scope, so a defensive scan cannot read host
+            # paths outside the tenant's own sandboxed directory.
+            if classify_target(body.target) == "repo_path" and not path_in_workspace(
+                body.target, workspace_for(ws_root, grant.tenant_id)
+            ):
+                raise HTTPException(
+                    status_code=403, detail="target path outside the tenant workspace"
+                )
             # Captured now for the evidence bundle the worker signs after the scan.
             engagement_summary = {
                 "id": engagement.id,
@@ -328,6 +360,9 @@ def create_app(
                 "engagement_id": scan.engagement_id,
                 "created_at": scan.created_at,
                 "finished_at": scan.finished_at,
+                # Per-engine coverage so the caller sees which engines ran, were
+                # unavailable, or errored, not just the rolled-up scan status.
+                "engines": json.loads(scan.engines_json) if scan.engines_json else [],
             }
         # Findings live in the per-scan encrypted store (isolated by scan id + tenant).
         store = ResultStore(rroot, scan_id, rkey, actor=f"runner:{grant.tenant_id}")

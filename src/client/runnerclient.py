@@ -44,14 +44,10 @@ class RunnerClient:
         result: dict = resp.json()
         return result
 
-    def create_engagement(
-        self, grant: str, authorized_by: str, scope: dict, ttl_minutes: int = 480
-    ) -> dict:
-        body: dict[str, object] = {
-            "authorized_by": authorized_by,
-            "scope": scope,
-            "ttl_minutes": ttl_minutes,
-        }
+    def create_engagement(self, grant: str, scope: dict, ttl_minutes: int = 480) -> dict:
+        # The approver identity is derived server-side from the verified grant, so the
+        # client does not (and cannot) supply an authorized_by.
+        body: dict[str, object] = {"scope": scope, "ttl_minutes": ttl_minutes}
         return self._post("/v1/engagements", grant, body)
 
     def get_engagement(self, grant: str, engagement_id: str) -> dict:

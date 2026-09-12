@@ -50,8 +50,12 @@ from .security import verify_password
 
 _MFA_ROLES = frozenset({"operator", "admin"})
 # API-key grants are capped below the elevated classes: automation cannot trigger
-# exploitation or tenant administration without an interactive, MFA-backed login.
-_API_KEY_EXCLUDED = frozenset({"redteam_exploit", "redteam_post_exploit", "admin"})
+# exploitation, tenant administration, or engagement authoring without an interactive,
+# MFA-backed login. control_plane_engage is capped so an API key cannot self-author the
+# authorization manifest that a scan then runs under.
+_API_KEY_EXCLUDED = frozenset(
+    {"redteam_exploit", "redteam_post_exploit", "admin", "control_plane_engage"}
+)
 # Capability marker carried only by interactive-login grants (never by a grant
 # minted from an API key), so an API-key-derived grant cannot mint or revoke keys.
 _API_KEY_MANAGE = "api_key_manage"

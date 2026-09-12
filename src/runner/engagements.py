@@ -11,10 +11,37 @@ from __future__ import annotations
 
 import json
 from datetime import timedelta
+from pathlib import Path
 
 from orchestrator import Engagement, Scope, ScopeList, now_utc
 
 from .models import Engagement as EngagementRow
+
+
+def workspace_for(root: str | Path, tenant_id: str) -> Path:
+    """The directory a tenant's scannable repository paths must resolve within."""
+    return Path(root) / tenant_id
+
+
+def path_in_workspace(target: str, workspace: Path) -> bool:
+    """True when a filesystem target resolves inside the tenant workspace.
+
+    Resolves symlinks and ``..`` before the containment check, so an absolute path or a
+    traversal that escapes the workspace is rejected. The workspace need not exist yet.
+    """
+    try:
+        resolved = Path(target).expanduser().resolve(strict=False)
+        base = workspace.expanduser().resolve(strict=False)
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return resolved == base or resolved.is_relative_to(base)
+
+
+def offending_scope_paths(spec: dict, workspace: Path) -> list[str]:
+    """Return the allow-scope repository paths that escape the tenant workspace."""
+    allow = spec.get("allowlist") or {}
+    paths = list(allow.get("repo_paths", []) or [])
+    return [p for p in paths if p and p.strip() and not path_in_workspace(p, workspace)]
 
 
 def scope_from_spec(spec: dict) -> Scope:

@@ -94,6 +94,21 @@ def engines_dir() -> str:
     return raw.strip() if raw and raw.strip() else _DEFAULT_ENGINES_DIR
 
 
+WORKSPACE_ROOT_ENV = "WRAITH_RUNNER_WORKSPACE_ROOT"
+_DEFAULT_WORKSPACE_ROOT = "./runner-workspaces"
+
+
+def workspace_root() -> str:
+    """Root directory under which each tenant's scannable files live (has a default).
+
+    A defensive scan may only read repository paths within the tenant's own
+    subdirectory of this root (``<root>/<tenant_id>``). This bounds what the engines
+    can read on the host until OS-level sandboxing of defensive scans is deployed.
+    """
+    raw = os.environ.get(WORKSPACE_ROOT_ENV)
+    return raw.strip() if raw and raw.strip() else _DEFAULT_WORKSPACE_ROOT
+
+
 PLATFORM_KEY_ENV = "WRAITH_RUNNER_PLATFORM_KEY"
 
 

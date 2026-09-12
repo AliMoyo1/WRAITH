@@ -5,6 +5,25 @@ from __future__ import annotations
 import json
 
 from adapters import AdapterRequest, SkillSpectorAdapter, SubprocessResult
+from adapters.base import scrubbed_env
+
+
+def test_scrubbed_env_is_an_allowlist(monkeypatch):
+    # Secrets (and anything not explicitly allowed) must never reach an engine
+    # subprocess; only OS-essential variables pass through.
+    for secret in (
+        "WRAITH_SIGNING_KEY", "WRAITH_RESULT_KEY", "WRAITH_RUNNER_SIGNING_KEY",
+        "WRAITH_RUNNER_RESULT_KEY", "WRAITH_RUNNER_PLATFORM_KEY",
+        "WRAITH_EVIDENCE_PRIVATE_KEY", "WRAITH_RUNNER_DB_URL", "AWS_SECRET_ACCESS_KEY",
+    ):
+        monkeypatch.setenv(secret, "s3cr3t")
+    monkeypatch.setenv("PATH", "/usr/bin")
+
+    env = scrubbed_env()
+
+    assert env.get("PATH") == "/usr/bin"  # essential var survives
+    assert not any(k.startswith("WRAITH_") for k in env)  # no WRAITH secret leaks
+    assert "AWS_SECRET_ACCESS_KEY" not in env  # unlisted var dropped by default
 
 CANNED = {
     "findings": [

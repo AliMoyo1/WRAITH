@@ -8,6 +8,7 @@ reaches the Runner.
 
 from __future__ import annotations
 
+import json
 from datetime import timedelta
 
 import pytest
@@ -22,6 +23,8 @@ SIGN_KEY = b"runner-engagement-signing-key"
 RESULT_KEY = b"runner-result-master-key"
 PLATFORM_KEY = b"platform-operator-key"
 _SCAN_CAPS = ("control_plane_scan", "control_plane_read")
+# Authoring an engagement now requires the Operator-only control_plane_engage class.
+_ENGAGE_CAPS = ("control_plane_engage", "control_plane_scan", "control_plane_read")
 
 
 class _FakeScanAdapter(EngineAdapter):
@@ -177,8 +180,8 @@ def test_repository_list_is_tenant_scoped(runner):
 
 
 def _create_engagement(client, tenant="t-a", domains=("example.com",)):
-    hdr = {"Authorization": f"Bearer {_bearer(tenant=tenant, caps=_SCAN_CAPS)}"}
-    body = {"authorized_by": "op@acme", "scope": {"allowlist": {"domains": list(domains)}}}
+    hdr = {"Authorization": f"Bearer {_bearer(tenant=tenant, caps=_ENGAGE_CAPS)}"}
+    body = {"scope": {"allowlist": {"domains": list(domains)}}}
     return client.post("/v1/engagements", json=body, headers=hdr), hdr
 
 
@@ -198,14 +201,35 @@ def test_engagement_create_get_close(runner):
     assert after["open"] is False and after["valid"] is False  # closed -> invalid
 
 
-def test_engagement_create_requires_scan_capability(runner):
+def test_engagement_create_requires_engage_capability(runner):
     client, _ = runner
-    # A read-only grant lacks control_plane_scan.
+    # A read-only grant lacks control_plane_engage.
     hdr = {"Authorization": f"Bearer {_bearer(caps=('control_plane_read',))}"}
-    resp = client.post(
-        "/v1/engagements", json={"authorized_by": "v", "scope": {"allowlist": {}}}, headers=hdr
-    )
+    resp = client.post("/v1/engagements", json={"scope": {"allowlist": {}}}, headers=hdr)
     assert resp.status_code == 403
+
+
+def test_engagement_create_scan_capability_is_insufficient(runner):
+    # Separation of duties: holding control_plane_scan (an Analyst can run scans) does
+    # not permit authoring an engagement; that needs the Operator-only engage class.
+    client, _ = runner
+    hdr = {"Authorization": f"Bearer {_bearer(caps=_SCAN_CAPS)}"}
+    resp = client.post("/v1/engagements", json={"scope": {"allowlist": {}}}, headers=hdr)
+    assert resp.status_code == 403
+
+
+def test_engagement_identity_is_taken_from_grant_not_body(runner):
+    # A client-supplied authorized_by is ignored; the approver is the verified principal.
+    client, _ = runner
+    hdr = {"Authorization": f"Bearer {_bearer(caps=_ENGAGE_CAPS)}"}
+    created = client.post(
+        "/v1/engagements",
+        json={"authorized_by": "attacker", "scope": {"allowlist": {"domains": ["example.com"]}}},
+        headers=hdr,
+    )
+    assert created.status_code == 200
+    got = client.get(f"/v1/engagements/{created.json()['id']}", headers=hdr).json()
+    assert got["created_by"] == "p1"  # grant.principal_id, not "attacker"
 
 
 def test_engagement_tenant_isolation(runner):
@@ -245,6 +269,8 @@ def test_scan_runs_and_stores_findings(runner):
     got = client.get(f"/v1/scans/{sid}", headers=hdr).json()
     assert got["status"] == "completed"
     assert {f["finding_id"] for f in got["findings"]} == {"f1"}
+    # Per-engine coverage is exposed, not just the rolled-up status.
+    assert any(e["name"] == "skillspector" and e["status"] == "OK" for e in got["engines"])
 
 
 def test_scan_requires_scan_capability(runner):
@@ -371,7 +397,9 @@ def test_run_scan_marks_killed_scan(runner):
         assert scan is not None and scan.status == "killed"
 
 
-_EXPLOIT_CAPS = ("redteam_exploit", "control_plane_scan", "control_plane_read")
+_EXPLOIT_CAPS = (
+    "redteam_exploit", "control_plane_engage", "control_plane_scan", "control_plane_read",
+)
 
 
 def _token(engagement_id, target, action="exploit", hours=1.0):
@@ -496,3 +524,135 @@ def test_evidence_tenant_isolation(runner):
     ).json()["id"]
     b = {"Authorization": f"Bearer {_bearer(tenant='t-b', caps=_SCAN_CAPS)}"}
     assert client.get(f"/v1/scans/{sid}/evidence", headers=b).status_code == 404
+
+
+class _UnavailableAdapter(EngineAdapter):
+    name = "trivy"
+
+    def is_available(self):
+        return False, "trivy not installed"
+
+    def _default_runner(self, request):
+        return SubprocessResult(0, "", "")
+
+    def _normalize(self, raw):
+        return []
+
+
+def test_scan_status_not_evaluated_when_engine_unavailable(runner, tmp_path):
+    # An unavailable engine yields zero findings; the scan must not report "completed".
+    from runner.repository import get_scan
+    from runner.worker import run_scan
+
+    _client, factory = runner
+    sid = _seed(factory, "t-a", target="https://example.com/x")
+    run_scan(
+        factory, tmp_path / "res", RESULT_KEY, [_UnavailableAdapter()], "t-a", sid,
+        "https://example.com/x",
+    )
+    with factory() as s:
+        scan = get_scan(s, "t-a", sid)
+        assert scan is not None
+        assert scan.status == "not_evaluated"
+        assert '"status": "UNAVAILABLE"' in (scan.engines_json or "")
+
+
+def test_scan_status_partial_when_one_engine_unavailable(runner, tmp_path):
+    from runner.repository import get_scan
+    from runner.worker import run_scan
+
+    _client, factory = runner
+    sid = _seed(factory, "t-a", target="https://example.com/x")
+    run_scan(
+        factory, tmp_path / "res", RESULT_KEY,
+        [_FakeScanAdapter(), _UnavailableAdapter()], "t-a", sid, "https://example.com/x",
+    )
+    with factory() as s:
+        scan = get_scan(s, "t-a", sid)
+        assert scan is not None and scan.status == "partial"
+
+
+# ---- workspace path containment (finding 2) ------------------------------------
+
+
+def _ws_runner(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from runner import create_app
+    from runner.db import create_all, make_engine, make_session_factory
+    from runner.worker import InlineExecutor
+
+    engine = make_engine(f"sqlite:///{tmp_path / 'runner.db'}")
+    create_all(engine)
+    factory = make_session_factory(engine)
+    app = create_app(
+        session_factory=factory, entitlement_public_key=PUB, signing_key=SIGN_KEY,
+        result_key=RESULT_KEY, result_root=tmp_path / "results", executor=InlineExecutor(),
+        adapters_for=_fake_adapters, platform_key=PLATFORM_KEY, sandbox=_FakeSandbox(),
+        evidence_key=EV_PRIV, workspace_root=tmp_path / "ws",
+    )
+    return TestClient(app), factory, tmp_path / "ws"
+
+
+def test_engagement_rejects_repo_path_outside_workspace(tmp_path):
+    client, _factory, _ws = _ws_runner(tmp_path)
+    hdr = {"Authorization": f"Bearer {_bearer(caps=_ENGAGE_CAPS)}"}
+    outside = str(tmp_path / "elsewhere" / "victim-repo")
+    resp = client.post(
+        "/v1/engagements",
+        json={"scope": {"allowlist": {"repo_paths": [outside]}}},
+        headers=hdr,
+    )
+    assert resp.status_code == 400
+    assert "workspace" in resp.json()["detail"]
+
+
+def test_engagement_accepts_repo_path_inside_workspace(tmp_path):
+    client, _factory, ws = _ws_runner(tmp_path)
+    hdr = {"Authorization": f"Bearer {_bearer(caps=_ENGAGE_CAPS)}"}
+    inside = str(ws / "t-a" / "my-repo")
+    resp = client.post(
+        "/v1/engagements",
+        json={"scope": {"allowlist": {"repo_paths": [inside]}}},
+        headers=hdr,
+    )
+    assert resp.status_code == 200
+
+
+def test_scan_rejects_repo_path_target_outside_workspace(tmp_path):
+    # Defense in depth: even under an (over-broad) engagement whose scope allows a path,
+    # a repo-path target outside the tenant workspace is refused at scan intake.
+    from runner import repository
+    from runner.engagements import build_engagement, scope_from_spec
+
+    client, factory, _ws = _ws_runner(tmp_path)
+    broad = str(tmp_path)  # a root above the tenant workspace
+    spec = {"allowlist": {"repo_paths": [broad]}, "enabled": True}
+    eng = build_engagement("eng-broad", "p1", scope_from_spec(spec), 480, SIGN_KEY)
+    assert eng.signature is not None
+    with factory() as s:
+        repository.create_engagement(
+            s, engagement_id=eng.id, tenant_id="t-a", created_by="p1",
+            scope_json=json.dumps(spec), approved_at=eng.approved_at,
+            expires_at=eng.expires_at, signature=eng.signature,
+        )
+    hdr = {"Authorization": f"Bearer {_bearer(caps=_ENGAGE_CAPS)}"}
+    target = str(tmp_path / "outside-repo")  # in the broad scope, outside the workspace
+    resp = client.post(
+        "/v1/scans",
+        json={"engagement_id": "eng-broad", "target": target, "track": "sast"},
+        headers=hdr,
+    )
+    assert resp.status_code == 403
+    assert "workspace" in resp.json()["detail"]
+
+
+def test_workspace_path_helpers(tmp_path):
+    from runner.engagements import offending_scope_paths, path_in_workspace, workspace_for
+
+    ws = workspace_for(tmp_path / "ws", "t-a")
+    assert path_in_workspace(str(ws / "repo"), ws) is True
+    assert path_in_workspace(str(tmp_path / "other"), ws) is False
+    assert path_in_workspace(str(ws / ".." / ".." / "etc"), ws) is False
+    spec = {"allowlist": {"repo_paths": [str(ws / "ok"), str(tmp_path / "bad")]}}
+    assert offending_scope_paths(spec, ws) == [str(tmp_path / "bad")]

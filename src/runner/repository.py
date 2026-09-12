@@ -103,11 +103,17 @@ def consume_token(session: Session, tenant_id: str, nonce: str) -> bool:
 
 
 def set_scan_status(
-    session: Session, scan: Scan, status: str, finished_at: str | None = None
+    session: Session,
+    scan: Scan,
+    status: str,
+    finished_at: str | None = None,
+    engines_json: str | None = None,
 ) -> None:
     scan.status = status
     if finished_at is not None:
         scan.finished_at = finished_at
+    if engines_json is not None:
+        scan.engines_json = engines_json
     session.commit()
 
 
