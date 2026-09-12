@@ -77,6 +77,21 @@ def _as_tier(value: Tier | str) -> Tier:
     return value if isinstance(value, Tier) else Tier(value)
 
 
+def entitlement_matrix() -> dict[CapabilityClass, tuple[Tier, frozenset[Role]]]:
+    """Return a copy of the capability-class policy matrix (min tier, allowed roles).
+
+    The single source of the matrix is ``_MATRIX``; this exposes it as data for
+    analysis (for example the effective-authority graph) without reaching into a
+    module private. The returned dict is a shallow copy; the tuples are immutable.
+    """
+    return dict(_MATRIX)
+
+
+def tier_meets(tier: Tier | str, minimum: Tier | str) -> bool:
+    """Return whether ``tier`` ranks at or above ``minimum`` (the tier gate)."""
+    return _TIER_RANK[_as_tier(tier)] >= _TIER_RANK[_as_tier(minimum)]
+
+
 def capabilities_for(roles: Iterable[Role | str], tier: Tier | str) -> list[str]:
     """Compute the capability classes a principal holds (authority side).
 

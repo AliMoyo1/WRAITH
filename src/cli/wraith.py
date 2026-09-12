@@ -1042,7 +1042,9 @@ def cmd_entitlement(args) -> int:
     """Least-privilege analysis over roles and tiers."""
     if args.entitlement_action == "recommend":
         return _entitlement_recommend(args)
-    print("Subcommands: recommend")
+    if args.entitlement_action == "graph":
+        return _entitlement_graph(args)
+    print("Subcommands: recommend, graph")
     return 2
 
 
@@ -1074,6 +1076,48 @@ def _entitlement_recommend(args) -> int:
         print(f"  {key}: {value}")
     if report.get("recommended_roles") is None:
         print("  note: some needed classes are not grantable by any role or tier")
+    return 0
+
+
+def _entitlement_graph(args) -> int:
+    import json
+
+    from authority_graph import build_authority_graph
+
+    if not args.roles or not args.tier:
+        print("  provide --roles <comma-separated> and --tier to graph a principal")
+        return 2
+    roles = [r.strip() for r in args.roles.split(",") if r.strip()]
+    try:
+        graph = build_authority_graph(roles, args.tier)
+    except ValueError as exc:
+        print(f"  invalid role or tier: {exc}")
+        return 2
+    data = graph.to_dict()
+    if args.json:
+        text = json.dumps(data, indent=2)
+        if args.out:
+            Path(args.out).write_text(text, encoding="utf-8")
+            print(f"  wrote {args.out}")
+        else:
+            print(text)
+        return 0
+    reach = data["reachability"]
+    print(f"  principal: roles={data['principal']['roles']} tier={data['principal']['tier']}")
+    print(f"  held classes: {reach['held_classes']}")
+    print(f"  blocked classes: {reach['blocked_classes']}")
+    print(f"  reachable tracks: {reach['reachable_tracks']}")
+    print(f"  can reach consequential: {reach['can_reach_consequential']}")
+    if reach["consequential_classes"]:
+        print(f"  consequential still requires single-use token for: {reach['requires_single_use_token']}")
+    print("  entitlement gate (principal -> class):")
+    for edge in data["edges"]:
+        if edge["gate"] == "entitlement" and edge["granted"]:
+            print(f"    {edge['dst']}: {edge['reason']}")
+    print("  engagement gate (held class -> activity, still gated by):")
+    for node in data["nodes"]:
+        if node["kind"] == "activity" and node["target_directed"]:
+            print(f"    {node['label']}: tracks={node['tracks']} requires {node['conditions']}")
     return 0
 
 
@@ -1242,11 +1286,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_doctor.add_argument("--engagement-file", dest="engagement_file", help="engagement record file")
     p_doctor.set_defaults(func=cmd_doctor)
 
-    p_ent = sub.add_parser("entitlement", help="least-privilege recommendations over roles and tiers")
-    p_ent.add_argument("entitlement_action", choices=["recommend"])
-    p_ent.add_argument("--needed", help="comma-separated capability classes the principal needs")
-    p_ent.add_argument("--roles", help="comma-separated current roles (with --tier, to analyze)")
-    p_ent.add_argument("--tier", help="current tier (with --roles)")
+    p_ent = sub.add_parser("entitlement", help="least-privilege recommendations and effective-authority graph")
+    p_ent.add_argument("entitlement_action", choices=["recommend", "graph"])
+    p_ent.add_argument("--needed", help="comma-separated capability classes the principal needs (recommend)")
+    p_ent.add_argument("--roles", help="comma-separated roles (recommend: with --tier to analyze; graph: required)")
+    p_ent.add_argument("--tier", help="tier (recommend: with --roles; graph: required)")
+    p_ent.add_argument("--json", action="store_true", help="emit the full graph as JSON (graph)")
+    p_ent.add_argument("--out", help="write JSON graph to this file (graph, with --json)")
     p_ent.set_defaults(func=cmd_entitlement)
 
     p_bom = sub.add_parser("agentbom", help="build or verify an Agent Bill of Materials")
