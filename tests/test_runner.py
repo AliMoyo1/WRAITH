@@ -17,6 +17,7 @@ from entitlement import CapabilityGrant, encode_grant, generate_keypair, now_utc
 from supervisor import Job, Supervisor
 
 PRIV, PUB = generate_keypair()
+EV_PRIV, EV_PUB = generate_keypair()
 SIGN_KEY = b"runner-engagement-signing-key"
 RESULT_KEY = b"runner-result-master-key"
 PLATFORM_KEY = b"platform-operator-key"
@@ -63,8 +64,7 @@ class _FakeSandbox:
             Job(adapter=a, request=AdapterRequest(target=target, timeout_seconds=timeout_seconds))
             for a in adapters
         ]
-        results = Supervisor(max_parallel=1).run(jobs)
-        return [f for r in results for f in r.findings]
+        return Supervisor(max_parallel=1).run(jobs)
 
 
 @pytest.fixture
@@ -88,6 +88,7 @@ def runner(tmp_path):
         adapters_for=_fake_adapters,
         platform_key=PLATFORM_KEY,
         sandbox=_FakeSandbox(),
+        evidence_key=EV_PRIV,
     )
     return TestClient(app), factory
 
@@ -461,3 +462,37 @@ def test_offensive_scan_fails_closed_without_sandbox(runner):
     with factory() as s:
         scan = get_scan(s, "t-a", sid)
         assert scan is not None and scan.status == "error"
+
+
+def test_scan_produces_verifiable_evidence(runner):
+    from evidence import verify_bundle
+
+    client, _ = runner
+    created, hdr = _create_engagement(client, domains=("example.com",))
+    eid = created.json()["id"]
+    sid = client.post(
+        "/v1/scans",
+        json={"engagement_id": eid, "target": "https://example.com/x", "track": "sast"},
+        headers=hdr,
+    ).json()["id"]
+    ev = client.get(f"/v1/scans/{sid}/evidence", headers=hdr)
+    assert ev.status_code == 200
+    bundle = ev.json()
+    ok, reason = verify_bundle(bundle, EV_PUB)
+    assert ok is True, reason
+    assert {f["finding_id"] for f in bundle["findings"]} == {"f1"}
+    assert bundle["engagement"]["id"] == eid
+    assert bundle["entitlement"]["tenant_id"] == "t-a"
+
+
+def test_evidence_tenant_isolation(runner):
+    client, _ = runner
+    created, hdr = _create_engagement(client, tenant="t-a", domains=("example.com",))
+    eid = created.json()["id"]
+    sid = client.post(
+        "/v1/scans",
+        json={"engagement_id": eid, "target": "https://example.com/x", "track": "sast"},
+        headers=hdr,
+    ).json()["id"]
+    b = {"Authorization": f"Bearer {_bearer(tenant='t-b', caps=_SCAN_CAPS)}"}
+    assert client.get(f"/v1/scans/{sid}/evidence", headers=b).status_code == 404

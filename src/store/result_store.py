@@ -178,6 +178,32 @@ class ResultStore:
         self._append_audit("export", count=len(findings), destination=str(out))
         return out
 
+    # ---- evidence bundle -------------------------------------------------
+    def put_bundle(self, bundle: dict) -> None:
+        """Store a signed evidence bundle for this engagement, encrypted at rest.
+
+        The bundle is already signed for portability; encryption here protects the
+        findings it carries while at rest, and the write is recorded in the audit log.
+        """
+        token = self._fernet.encrypt(_canonical(bundle))
+        path = self.dir / "evidence.bundle"
+        path.write_bytes(token)
+        self._restrict(path)
+        self._append_audit("put_bundle")
+
+    def get_bundle(self) -> dict | None:
+        """Return the stored evidence bundle, or None if there is none."""
+        path = self.dir / "evidence.bundle"
+        if not path.exists():
+            return None
+        try:
+            plaintext = self._fernet.decrypt(path.read_bytes())
+        except InvalidToken as exc:
+            self._append_audit("get_bundle_failed")
+            raise ResultStoreError("decryption failed (wrong key or tampered ciphertext)") from exc
+        self._append_audit("get_bundle")
+        return json.loads(plaintext)
+
     def purge(self) -> None:
         """Remove all stored results for this engagement (call on engagement close)."""
         self._append_audit("purge")

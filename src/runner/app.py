@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from adapters import EngineAdapter
 from entitlement import CapabilityClass, CapabilityGrant, decode_grant
+from evidence import signing_key_optional
 from store import ResultStore
 
 from . import repository
@@ -42,6 +43,7 @@ from .tokens import TokenError, consume_approval_token
 from .worker import (
     BackgroundExecutor,
     CubeSandbox,
+    EvidenceContext,
     Executor,
     Sandbox,
     default_adapters,
@@ -110,6 +112,7 @@ def create_app(
     adapters_for: Callable[[str], list[EngineAdapter]] | None = None,
     platform_key: bytes | None = None,
     sandbox: Sandbox | None = None,
+    evidence_key: bytes | None = None,
 ) -> FastAPI:
     if session_factory is None:
         engine = make_engine(database_url())
@@ -129,6 +132,8 @@ def create_app(
     )
     plat_key = platform_key if platform_key is not None else _default_platform_key()
     scan_sandbox = sandbox if sandbox is not None else CubeSandbox()
+    # Evidence production is optional: enabled when a signing key is configured.
+    ev_key = evidence_key if evidence_key is not None else signing_key_optional()
 
     app = FastAPI(title="WRAITH Runner", version="0.1.0")
     app.state.session_factory = session_factory
@@ -249,6 +254,21 @@ def create_app(
                 raise HTTPException(status_code=403, detail=f"engagement invalid: {reason}")
             if not engagement.scope.allows(body.target):
                 raise HTTPException(status_code=403, detail="target not in engagement scope")
+            # Captured now for the evidence bundle the worker signs after the scan.
+            engagement_summary = {
+                "id": engagement.id,
+                "authorized_by": engagement.authorized_by,
+                "approved_at": engagement.approved_at,
+                "expires_at": engagement.expires_at,
+                "scope_fingerprint": engagement.scope.fingerprint(),
+            }
+            entitlement_summary = {
+                "tenant_id": grant.tenant_id,
+                "principal_id": grant.principal_id,
+                "roles": grant.roles,
+                "tier": grant.tier,
+                "capabilities": grant.capabilities,
+            }
             # Token gate: a gated (offensive) track additionally requires a valid,
             # single-use, target-bound approval token, consumed durably here.
             action = _GATED_TRACKS.get(body.track)
@@ -279,10 +299,15 @@ def create_app(
         adapters = build_adapters(body.track)
         # Offensive (gated) tracks run inside the sandbox; defensive tracks run directly.
         run_sandbox = scan_sandbox if body.track in _GATED_TRACKS else None
+        evidence = (
+            EvidenceContext(ev_key, engagement_summary, entitlement_summary)
+            if ev_key is not None
+            else None
+        )
         scan_executor.submit(
             lambda: run_scan(
                 session_factory, rroot, rkey, adapters, tenant_id, scan_id, target,
-                sandbox=run_sandbox,
+                sandbox=run_sandbox, evidence=evidence,
             )
         )
         return {"id": scan_id, "status": "queued"}
@@ -308,6 +333,21 @@ def create_app(
         store = ResultStore(rroot, scan_id, rkey, actor=f"runner:{grant.tenant_id}")
         meta["findings"] = [store.get_finding(fid) for fid in store.list_findings()]
         return meta
+
+    @app.get("/v1/scans/{scan_id}/evidence")
+    def scan_evidence(scan_id: str, authorization: str = Header(default="")) -> dict[str, object]:
+        # The signed evidence bundle for a completed scan, verifiable with the
+        # evidence public key alone. Tenant-scoped by the scan lookup.
+        grant = _grant_from_header(authorization, pub)
+        _require_class(grant, CapabilityClass.CONTROL_PLANE_READ.value)
+        with session_factory() as session:
+            if repository.get_scan(session, grant.tenant_id, scan_id) is None:
+                raise HTTPException(status_code=404, detail="scan not found")
+        store = ResultStore(rroot, scan_id, rkey, actor=f"runner:{grant.tenant_id}")
+        bundle = store.get_bundle()
+        if bundle is None:
+            raise HTTPException(status_code=404, detail="no evidence bundle for this scan")
+        return bundle
 
     @app.post("/v1/kill")
     def kill_tenant(

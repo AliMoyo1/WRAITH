@@ -75,6 +75,10 @@ class RunnerClient:
     def get_scan(self, grant: str, scan_id: str) -> dict:
         return self._get(f"/v1/scans/{scan_id}", grant)
 
+    def get_evidence(self, grant: str, scan_id: str) -> dict:
+        """Fetch the signed evidence bundle for a scan (verify it with the public key)."""
+        return self._get(f"/v1/scans/{scan_id}/evidence", grant)
+
     def list_scans(self, grant: str) -> dict:
         return self._get("/v1/scans", grant)
 

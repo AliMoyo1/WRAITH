@@ -25,6 +25,18 @@ def signing_key() -> bytes:
     return base64.urlsafe_b64decode(raw.strip())
 
 
+def signing_key_optional() -> bytes | None:
+    """Return the evidence signing key if configured, else None (evidence disabled).
+
+    A producer (the Runner, the CLI) uses this to make evidence production optional:
+    bundles are emitted only when a signing key is set.
+    """
+    raw = os.environ.get(PRIVATE_KEY_ENV)
+    if not raw or not raw.strip():
+        return None
+    return base64.urlsafe_b64decode(raw.strip())
+
+
 def public_key() -> bytes:
     """Return the evidence verification public key, or raise (no default)."""
     raw = os.environ.get(PUBLIC_KEY_ENV)
