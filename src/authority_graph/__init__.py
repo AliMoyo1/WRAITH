@@ -7,6 +7,18 @@ See graph.py.
 
 from __future__ import annotations
 
-from .graph import Activity, ActivityKind, AuthorityGraph, build_authority_graph
+from .graph import (
+    Activity,
+    ActivityKind,
+    AuthorityGraph,
+    AuthorizationContext,
+    build_authority_graph,
+)
 
-__all__ = ["Activity", "ActivityKind", "AuthorityGraph", "build_authority_graph"]
+__all__ = [
+    "Activity",
+    "ActivityKind",
+    "AuthorityGraph",
+    "AuthorizationContext",
+    "build_authority_graph",
+]

@@ -87,3 +87,25 @@ an analysis class reaches the analysis track set, not one fixed track.
   `src/cli/wraith.py`.
 - Added `tests/test_authority_graph.py` (13 tests).
 - Gates green: ruff clean, mypy clean (58 files), pytest 273 passed.
+
+## Finding 6 (audit): consume a real grant, not just role x tier
+
+The review noted the graph recomputed capabilities from role and tier and never consumed
+the actual signed grant, so it reported policy reachability, not a live grant's effective
+authority. Resolution (user chose "extend to real grant"):
+
+- `build_authority_graph` now also accepts a real `grant` (its roles, tier, and
+  capabilities are used), an optional `public_key` to verify it (a grant that does not
+  verify raises, fail closed), and an `AuthorizationContext` (engagement validity,
+  target, in-scope, token) for one target.
+- Four layers are distinguished per class: eligible (policy), held (the grant's actual
+  capabilities), conditionally reachable (held, target-directed, conditions not yet
+  met), currently authorized (held and authorized now). `excluded_by_grant` surfaces the
+  gap between eligible and held (for example a capped API-key grant).
+- Rebased onto main after PR #40, which added the `control_plane_engage` class: it maps
+  to a control-plane "Engagement authoring" activity (not target-directed), and the
+  operator/all-classes tests were updated (matrix now has 8 classes).
+- CLI gained `--grant <file>` (verified against `WRAITH_ENTITLEMENT_PUBLIC_KEY` when
+  set) plus `--target/--engagement-valid/--in-scope/--have-token` to judge current
+  authorization; the summary shows eligible/held/excluded/currently-authorized layers.
+- Gates green: ruff clean, mypy clean (58 files), pytest 292 passed.

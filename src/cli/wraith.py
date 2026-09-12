@@ -1080,18 +1080,39 @@ def _entitlement_recommend(args) -> int:
 
 
 def _entitlement_graph(args) -> int:
+    import base64
     import json
+    import os
 
-    from authority_graph import build_authority_graph
+    from authority_graph import AuthorizationContext, build_authority_graph
+    from entitlement import decode_grant
 
-    if not args.roles or not args.tier:
-        print("  provide --roles <comma-separated> and --tier to graph a principal")
-        return 2
-    roles = [r.strip() for r in args.roles.split(",") if r.strip()]
+    context = AuthorizationContext(
+        engagement_valid=bool(args.engagement_valid),
+        target=args.target,
+        target_in_scope=bool(args.in_scope),
+        has_valid_token=bool(args.have_token),
+    )
     try:
-        graph = build_authority_graph(roles, args.tier)
+        if args.grant:
+            token = Path(args.grant).read_text(encoding="utf-8").strip()
+            grant = decode_grant(token)
+            # Verify against the authority public key when it is available, so held is a
+            # verified fact; otherwise the grant is read unverified (grant_verified null).
+            raw = os.environ.get("WRAITH_ENTITLEMENT_PUBLIC_KEY", "").strip()
+            pub = base64.urlsafe_b64decode(raw) if raw else None
+            graph = build_authority_graph(grant=grant, public_key=pub, context=context)
+        elif args.roles and args.tier:
+            roles = [r.strip() for r in args.roles.split(",") if r.strip()]
+            graph = build_authority_graph(roles, args.tier, context=context)
+        else:
+            print("  provide --grant <file>, or both --roles and --tier")
+            return 2
+    except FileNotFoundError:
+        print(f"  no grant file at {args.grant}")
+        return 2
     except ValueError as exc:
-        print(f"  invalid role or tier: {exc}")
+        print(f"  invalid input: {exc}")
         return 2
     data = graph.to_dict()
     if args.json:
@@ -1103,14 +1124,22 @@ def _entitlement_graph(args) -> int:
             print(text)
         return 0
     reach = data["reachability"]
-    print(f"  principal: roles={data['principal']['roles']} tier={data['principal']['tier']}")
+    principal = data["principal"]
+    print(f"  principal: roles={principal['roles']} tier={principal['tier']}")
+    if "grant_verified" in principal:
+        print(f"  grant verified: {principal['grant_verified']}")
+    print(f"  eligible classes: {reach['eligible_classes']}")
     print(f"  held classes: {reach['held_classes']}")
-    print(f"  blocked classes: {reach['blocked_classes']}")
+    if reach["excluded_by_grant"]:
+        print(f"  eligible but not held (capped by the grant): {reach['excluded_by_grant']}")
+    print(f"  currently authorized: {reach['currently_authorized']}")
+    if reach["conditionally_reachable"]:
+        print(f"  conditionally reachable (need engagement/token): {reach['conditionally_reachable']}")
     print(f"  reachable tracks: {reach['reachable_tracks']}")
     print(f"  can reach consequential: {reach['can_reach_consequential']}")
     if reach["consequential_classes"]:
         print(f"  consequential still requires single-use token for: {reach['requires_single_use_token']}")
-    print("  entitlement gate (principal -> class):")
+    print("  entitlement gate (principal -> eligible class):")
     for edge in data["edges"]:
         if edge["gate"] == "entitlement" and edge["granted"]:
             print(f"    {edge['dst']}: {edge['reason']}")
@@ -1290,7 +1319,21 @@ def build_parser() -> argparse.ArgumentParser:
     p_ent.add_argument("entitlement_action", choices=["recommend", "graph"])
     p_ent.add_argument("--needed", help="comma-separated capability classes the principal needs (recommend)")
     p_ent.add_argument("--roles", help="comma-separated roles (recommend: with --tier to analyze; graph: required)")
-    p_ent.add_argument("--tier", help="tier (recommend: with --roles; graph: required)")
+    p_ent.add_argument("--tier", help="tier (recommend: with --roles; graph: required unless --grant)")
+    p_ent.add_argument("--grant", help="graph a real bearer grant from this file (verified if the key is set)")
+    p_ent.add_argument("--target", help="graph: the target to judge current authorization against")
+    p_ent.add_argument(
+        "--engagement-valid", dest="engagement_valid", action="store_true",
+        help="graph: an open, signed, unexpired engagement exists for the target",
+    )
+    p_ent.add_argument(
+        "--in-scope", dest="in_scope", action="store_true",
+        help="graph: the engagement scope allows the target",
+    )
+    p_ent.add_argument(
+        "--have-token", dest="have_token", action="store_true",
+        help="graph: a valid single-use approval token for the target is held",
+    )
     p_ent.add_argument("--json", action="store_true", help="emit the full graph as JSON (graph)")
     p_ent.add_argument("--out", help="write JSON graph to this file (graph, with --json)")
     p_ent.set_defaults(func=cmd_entitlement)
