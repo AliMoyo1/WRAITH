@@ -807,7 +807,9 @@ def cmd_runner(args) -> int:
             return _runner_status(client, grant, args)
         if args.runner_action == "scans":
             return _runner_scans(client, grant, args)
-        print("Subcommands: engage, scan, status, scans")
+        if args.runner_action == "evidence":
+            return _runner_evidence(client, grant, args)
+        print("Subcommands: engage, scan, status, scans, evidence")
         return 2
     except RunnerError as exc:
         print(f"  runner error: {exc}")
@@ -858,6 +860,21 @@ def _runner_scans(client, grant: str, args) -> int:
         return 0
     for s in scans:
         print(f"  {s['id']}: {s['status']} track={s.get('track')} target={s.get('target')}")
+    return 0
+
+
+def _runner_evidence(client, grant: str, args) -> int:
+    import json
+
+    if not args.arg:
+        print("  a scan id is required")
+        return 2
+    bundle = client.get_evidence(grant, args.arg)
+    if args.out:
+        Path(args.out).write_text(json.dumps(bundle, indent=2), encoding="utf-8")
+        print(f"  evidence written to {args.out}; verify with 'wraith evidence verify {args.out}'")
+    else:
+        print(f"  evidence for {args.arg}: {bundle.get('completeness')}")
     return 0
 
 
@@ -969,8 +986,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_auth.set_defaults(func=cmd_auth)
 
     p_runner = sub.add_parser("runner", help="drive the Runner: engagements and scans (needs 'auth login')")
-    p_runner.add_argument("runner_action", choices=["engage", "scan", "status", "scans"])
-    p_runner.add_argument("arg", nargs="?", help="scan target (for scan) or scan id (for status)")
+    p_runner.add_argument("runner_action", choices=["engage", "scan", "status", "scans", "evidence"])
+    p_runner.add_argument("arg", nargs="?", help="scan target (for scan) or scan id (for status/evidence)")
     p_runner.add_argument("--runner", help="Runner base URL (default env WRAITH_RUNNER_URL)")
     p_runner.add_argument("--authority", help="authority base URL (for grant refresh)")
     p_runner.add_argument("--engagement", dest="engagement_id", help="engagement id (for scan)")
@@ -979,6 +996,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_runner.add_argument("--scope", help="scope file (for engage; default config/scope.yaml)")
     p_runner.add_argument("--by", help="authorizing operator (for engage)")
     p_runner.add_argument("--hours", type=float, default=8.0, help="engagement lifetime in hours (for engage)")
+    p_runner.add_argument("--out", help="write the evidence bundle to this file (for evidence)")
     p_runner.set_defaults(func=cmd_runner)
 
     p_evidence = sub.add_parser("evidence", help="verify a signed evidence bundle")

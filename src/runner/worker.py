@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
@@ -24,11 +25,13 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from adapters import (
     AdapterRequest,
+    AdapterResult,
     EngineAdapter,
     SemgrepAdapter,
     SkillSpectorAdapter,
     TrivyAdapter,
 )
+from evidence import build_bundle
 from store import ResultStore
 from supervisor import Job, Supervisor
 
@@ -60,7 +63,7 @@ class BackgroundExecutor:
 
 class Sandbox(Protocol):
     def available(self) -> tuple[bool, str]: ...
-    def run(self, adapters: list[EngineAdapter], target: str, timeout_seconds: float) -> list[dict]: ...
+    def run(self, adapters: list[EngineAdapter], target: str, timeout_seconds: float) -> list[AdapterResult]: ...
 
 
 class CubeSandbox:
@@ -75,8 +78,18 @@ class CubeSandbox:
     def available(self) -> tuple[bool, str]:
         return False, "CubeSandbox not configured (needs x86_64 Linux + KVM and a pinned image)"
 
-    def run(self, adapters: list[EngineAdapter], target: str, timeout_seconds: float) -> list[dict]:
+    def run(self, adapters: list[EngineAdapter], target: str, timeout_seconds: float) -> list[AdapterResult]:
         raise RuntimeError("CubeSandbox is not available in this environment")
+
+
+@dataclass
+class EvidenceContext:
+    """What run_scan needs to produce a signed evidence bundle for a scan: the
+    signing key and the engagement and entitlement summaries to record."""
+
+    key: bytes
+    engagement: dict
+    entitlement: dict | None
 
 
 def default_adapters(track: str, engines_dir: str | Path) -> list[EngineAdapter]:
@@ -101,6 +114,7 @@ def run_scan(
     target: str,
     timeout_seconds: float = 300.0,
     sandbox: Sandbox | None = None,
+    evidence: EvidenceContext | None = None,
 ) -> None:
     """Run the adapters, store findings per scan, and update the scan status.
 
@@ -122,17 +136,31 @@ def run_scan(
             ok, reason = sandbox.available()
             if not ok:
                 raise RuntimeError(f"sandbox unavailable: {reason}")
-            findings = sandbox.run(adapters, target, timeout_seconds)
+            results = sandbox.run(adapters, target, timeout_seconds)
         else:
             jobs = [
                 Job(adapter=a, request=AdapterRequest(target=target, timeout_seconds=timeout_seconds))
                 for a in adapters
             ]
             results = Supervisor(max_parallel=2).run(jobs)
-            findings = [f for r in results for f in r.findings]
+        findings = [f for r in results for f in r.findings]
         store = ResultStore(result_root, scan_id, result_key, actor=f"runner:{tenant_id}")
         for finding in findings:
             store.put_finding(finding)
+        if evidence is not None:
+            engines = [
+                {
+                    "name": r.engine,
+                    "version": r.engine_version,
+                    "status": r.status,
+                    "coverage": r.coverage.get("status"),
+                }
+                for r in results
+            ]
+            bundle = build_bundle(
+                evidence.engagement, evidence.entitlement, engines, findings
+            ).sign(evidence.key)
+            store.put_bundle(bundle.to_dict())
     except Exception:
         logging.getLogger("wraith.runner").exception("scan %s failed", scan_id)
         status = "error"

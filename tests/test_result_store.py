@@ -166,6 +166,18 @@ def test_finding_id_unsafe_refused_no_silent_collision(tmp_path):
     assert s.list_findings() == ["ab"]
 
 
+def test_bundle_roundtrip_and_not_listed_as_finding(tmp_path):
+    s = _store(tmp_path)
+    s.put_finding({"finding_id": "f1"})
+    s.put_bundle({"signature": "sig", "findings": []})
+    assert s.get_bundle() == {"signature": "sig", "findings": []}
+    assert s.list_findings() == ["f1"]  # the bundle is not picked up as a finding
+
+
+def test_get_bundle_none_when_absent(tmp_path):
+    assert _store(tmp_path).get_bundle() is None
+
+
 def test_cli_report_without_key_returns_2(monkeypatch):
     from cli import wraith
     monkeypatch.delenv("WRAITH_RESULT_KEY", raising=False)

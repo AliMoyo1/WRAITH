@@ -10,6 +10,7 @@ from adapters import AdapterResult, EngineAdapter, SubprocessResult
 from entitlement import CapabilityGrant, encode_grant, generate_keypair, now_utc
 
 PRIV, PUB = generate_keypair()
+EV_PRIV, EV_PUB = generate_keypair()
 SIGN_KEY = b"rc-sign-key"
 RESULT_KEY = b"rc-result-key"
 PLATFORM_KEY = b"rc-platform-key"
@@ -61,6 +62,7 @@ def client(tmp_path):
         executor=InlineExecutor(),
         adapters_for=lambda track: [_FakeAdapter()],
         platform_key=PLATFORM_KEY,
+        evidence_key=EV_PRIV,
     )
     return RunnerClient("http://runner", http_client=TestClient(app))
 
@@ -103,6 +105,18 @@ def test_error_surfaces(client):
 
     with pytest.raises(RunnerError):
         client.get_scan(_grant(), "nonexistent")
+
+
+def test_get_evidence(client):
+    from evidence import verify_bundle
+
+    grant = _grant()
+    eng = client.create_engagement(grant, "op", {"allowlist": {"domains": ["example.com"]}})
+    scan = client.create_scan(grant, eng["id"], "https://example.com/x", "sast")
+    client.wait_for_scan(grant, scan["id"])
+    bundle = client.get_evidence(grant, scan["id"])
+    ok, reason = verify_bundle(bundle, EV_PUB)
+    assert ok is True, reason
 
 
 def test_cli_runner_requires_login(tmp_path, monkeypatch):
