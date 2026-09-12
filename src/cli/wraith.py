@@ -1063,6 +1063,70 @@ def _entitlement_recommend(args) -> int:
     return 0
 
 
+def cmd_agentbom(args) -> int:
+    """Build or verify an Agent Bill of Materials."""
+    if args.agentbom_action == "build":
+        return _agentbom_build(args)
+    if args.agentbom_action == "verify":
+        return _agentbom_verify(args)
+    print("Subcommands: build, verify")
+    return 2
+
+
+def _agentbom_build(args) -> int:
+    import json
+
+    from agentbom import build_bom
+    from evidence import signing_key_optional
+
+    if not args.file:
+        print("  a descriptor file is required")
+        return 2
+    try:
+        descriptor = json.loads(Path(args.file).read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError) as exc:
+        print(f"  cannot read descriptor: {exc}")
+        return 2
+    bom = build_bom(descriptor)
+    key = signing_key_optional()
+    if key is not None:
+        bom.sign(key)
+    if args.out:
+        Path(args.out).write_text(json.dumps(bom.to_dict(), indent=2), encoding="utf-8")
+        print(f"  agent BOM ({'signed' if bom.signature else 'unsigned'}) written to {args.out}")
+    else:
+        summary = bom.summary
+        print(f"  agent: {bom.agent} (model={bom.model})")
+        print(f"  components: {summary['counts']}")
+        for flag, value in summary["risk_flags"].items():
+            print(f"  {flag}: {value}")
+    return 0
+
+
+def _agentbom_verify(args) -> int:
+    import json
+
+    from agentbom import verify_bom
+    from evidence import public_key
+
+    if not args.file:
+        print("  a BOM file is required")
+        return 2
+    try:
+        data = json.loads(Path(args.file).read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError) as exc:
+        print(f"  cannot read bom: {exc}")
+        return 2
+    try:
+        pub = public_key()
+    except RuntimeError as exc:
+        print(f"  {exc}")
+        return 2
+    ok, reason = verify_bom(data, pub)
+    print(f"  {'VALID' if ok else 'INVALID'}: {reason}")
+    return 0 if ok else 2
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="wraith", description="Full-spectrum offensive security platform")
     parser.add_argument("--version", action="version", version=f"WRAITH v{__version__}")
@@ -1170,6 +1234,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_ent.add_argument("--roles", help="comma-separated current roles (with --tier, to analyze)")
     p_ent.add_argument("--tier", help="current tier (with --roles)")
     p_ent.set_defaults(func=cmd_entitlement)
+
+    p_bom = sub.add_parser("agentbom", help="build or verify an Agent Bill of Materials")
+    p_bom.add_argument("agentbom_action", choices=["build", "verify"])
+    p_bom.add_argument("file", nargs="?", help="descriptor JSON (build) or BOM JSON (verify)")
+    p_bom.add_argument("--out", help="write the BOM to this file (build)")
+    p_bom.set_defaults(func=cmd_agentbom)
     return parser
 
 
