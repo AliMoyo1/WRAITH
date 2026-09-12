@@ -18,6 +18,7 @@ from .grant import CapabilityGrant
 class CapabilityClass(Enum):
     CONTROL_PLANE_READ = "control_plane_read"
     CONTROL_PLANE_SCAN = "control_plane_scan"
+    CONTROL_PLANE_ENGAGE = "control_plane_engage"
     REDTEAM_RECON = "redteam_recon"
     REDTEAM_PROBE = "redteam_probe"
     REDTEAM_EXPLOIT = "redteam_exploit"
@@ -52,6 +53,10 @@ _MATRIX: dict[CapabilityClass, tuple[Tier, frozenset[Role]]] = {
         Tier.COMMUNITY,
         frozenset({Role.ANALYST, Role.OPERATOR}),
     ),
+    # Authoring an engagement (signing the authorization manifest) is Operator-only,
+    # separate from running scans under one: an Analyst may scan within an
+    # Operator-authored engagement but cannot self-approve one (separation of duties).
+    CapabilityClass.CONTROL_PLANE_ENGAGE: (Tier.COMMUNITY, frozenset({Role.OPERATOR})),
     CapabilityClass.REDTEAM_RECON: (Tier.PRO, frozenset({Role.ANALYST, Role.OPERATOR})),
     CapabilityClass.REDTEAM_PROBE: (Tier.PRO, frozenset({Role.ANALYST, Role.OPERATOR})),
     CapabilityClass.REDTEAM_EXPLOIT: (Tier.ENTERPRISE, frozenset({Role.OPERATOR})),

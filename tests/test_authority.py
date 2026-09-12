@@ -248,7 +248,9 @@ def test_api_key_grant_capped_below_operator(app_client):
     _seed(factory, tier="enterprise", roles=("operator",))
     op_grant = _operator_grant(client)
     hdr = {"Authorization": f"Bearer {op_grant}"}
-    assert "redteam_exploit" in client.get("/v1/me", headers=hdr).json()["capabilities"]
+    op_caps = client.get("/v1/me", headers=hdr).json()["capabilities"]
+    assert "redteam_exploit" in op_caps
+    assert "control_plane_engage" in op_caps  # an interactive Operator can author engagements
 
     raw = client.post("/v1/api-keys", json={"name": "bot"}, headers=hdr).json()["api_key"]
     key_grant = client.post("/v1/auth/token", json={"api_key": raw}).json()["grant"]
@@ -256,8 +258,10 @@ def test_api_key_grant_capped_below_operator(app_client):
         "/v1/me", headers={"Authorization": f"Bearer {key_grant}"}
     ).json()["capabilities"]
     assert "redteam_probe" in key_caps  # non-elevated classes remain
+    assert "control_plane_scan" in key_caps  # automation can still run scans
     assert "redteam_exploit" not in key_caps  # capped below Operator
     assert "redteam_post_exploit" not in key_caps
+    assert "control_plane_engage" not in key_caps  # automation cannot self-author engagements
 
 
 def test_auth_token_rejects_bad_key(app_client):

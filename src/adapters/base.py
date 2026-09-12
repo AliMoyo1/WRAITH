@@ -26,8 +26,31 @@ from pathlib import Path
 
 ADAPTER_CONTRACT_VERSION = "1.0"
 
-# WRAITH secrets that must never be exposed to a scanned engine subprocess.
-_SCRUB_ENV = ("WRAITH_SIGNING_KEY", "WRAITH_RESULT_KEY")
+# Environment allowlist: only these variables reach a scanned engine subprocess.
+# An allowlist (not a blacklist) is the safe default: a new WRAITH secret, or any
+# other sensitive variable in the service environment, is excluded automatically
+# rather than requiring someone to remember to add it to a denylist. Engine-specific
+# configuration is passed as CLI arguments, never inherited from the environment.
+# Names are matched case-insensitively (Windows env vars vary in case).
+_ENV_ALLOWLIST = frozenset(
+    name.upper()
+    for name in (
+        # POSIX essentials
+        "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TERM", "TZ", "TMPDIR",
+        "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE", "LC_NUMERIC", "LC_MESSAGES",
+        # TLS trust stores some engines need to fetch over HTTPS
+        "SSL_CERT_FILE", "SSL_CERT_DIR", "CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE",
+        # XDG dirs (engine caches)
+        "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME",
+        # Windows essentials
+        "SYSTEMROOT", "WINDIR", "SYSTEMDRIVE", "HOMEDRIVE", "HOMEPATH",
+        "USERPROFILE", "PUBLIC", "TEMP", "TMP", "APPDATA", "LOCALAPPDATA",
+        "PROGRAMDATA", "PATHEXT", "COMSPEC", "OS", "NUMBER_OF_PROCESSORS",
+        "PROCESSOR_ARCHITECTURE", "PROCESSOR_IDENTIFIER",
+        "PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMW6432",
+        "COMMONPROGRAMFILES", "COMMONPROGRAMFILES(X86)", "COMMONPROGRAMW6432",
+    )
+)
 
 
 @dataclass
@@ -67,11 +90,13 @@ def _to_text(value: object) -> str:
 
 
 def scrubbed_env() -> dict[str, str]:
-    """A copy of the environment with WRAITH secrets removed."""
-    env = dict(os.environ)
-    for key in _SCRUB_ENV:
-        env.pop(key, None)
-    return env
+    """The subprocess environment: only allowlisted variables (fail closed).
+
+    Everything not in ``_ENV_ALLOWLIST`` is dropped, so no WRAITH secret (signing,
+    result, platform, evidence, or database keys) and no other unexpected variable
+    reaches a scanned engine. Matched case-insensitively.
+    """
+    return {k: v for k, v in os.environ.items() if k.upper() in _ENV_ALLOWLIST}
 
 
 def run_subprocess(cmd: list[str], cwd: str | Path | None, timeout: float, env: dict | None = None) -> SubprocessResult:

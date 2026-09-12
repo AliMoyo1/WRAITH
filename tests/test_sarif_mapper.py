@@ -48,3 +48,22 @@ def test_to_finding_is_reusable_and_complete():
     assert f["finding_id"] == "trivy-abc" and f["engine"] == "trivy"
     assert f["severity"] == "HIGH" and f["layer"] == 6
     assert f["evaluation_result"] == "FINDING" and f["coverage_status"] == "INTEGRATED"
+
+
+def test_finding_id_is_safe_when_no_fingerprint(tmp_path):
+    from store import ResultStore
+
+    # No SARIF fingerprint: the fallback "rule:file:line" has a colon and a path
+    # separator, which the result store rejects. The finding id must still be safe.
+    f = to_finding(_result(rule_id="R", fp=None, file="src/a.py", line=1), "semgrep", 6)
+    assert f["fingerprint"] == "R:src/a.py:1"  # human-readable fingerprint preserved
+    assert ":" not in f["finding_id"] and "/" not in f["finding_id"]
+    assert f["finding_id"].startswith("semgrep-")
+    # And it actually persists: previously this raised ResultStoreError and failed the scan.
+    store = ResultStore(tmp_path, "scan-1", b"master-key-bytes", actor="test")
+    assert store.put_finding(f) == f["finding_id"]
+
+
+def test_finding_id_preserved_when_fingerprint_is_safe():
+    f = to_finding(_result(rule_id="R", fp="fp-1"), "trivy", 6)
+    assert f["finding_id"] == "trivy-fp-1"  # a readable, already-safe id is kept as-is

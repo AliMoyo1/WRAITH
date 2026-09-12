@@ -67,7 +67,7 @@ def client(tmp_path):
     return RunnerClient("http://runner", http_client=TestClient(app))
 
 
-def _grant(tenant="t-a", caps=("control_plane_scan", "control_plane_read")):
+def _grant(tenant="t-a", caps=("control_plane_engage", "control_plane_scan", "control_plane_read")):
     grant = CapabilityGrant(
         tenant_id=tenant,
         principal_id="p1",
@@ -82,7 +82,7 @@ def _grant(tenant="t-a", caps=("control_plane_scan", "control_plane_read")):
 
 def test_engagement_and_scan_roundtrip(client):
     grant = _grant()
-    eng = client.create_engagement(grant, "op", {"allowlist": {"domains": ["example.com"]}})
+    eng = client.create_engagement(grant, {"allowlist": {"domains": ["example.com"]}})
     assert eng["open"] is True
     assert client.get_engagement(grant, eng["id"])["valid"] is True
 
@@ -96,7 +96,7 @@ def test_engagement_and_scan_roundtrip(client):
 
 def test_close_engagement(client):
     grant = _grant()
-    eng = client.create_engagement(grant, "op", {"allowlist": {"domains": ["example.com"]}})
+    eng = client.create_engagement(grant, {"allowlist": {"domains": ["example.com"]}})
     assert client.close_engagement(grant, eng["id"])["open"] is False
 
 
@@ -111,7 +111,7 @@ def test_get_evidence(client):
     from evidence import verify_bundle
 
     grant = _grant()
-    eng = client.create_engagement(grant, "op", {"allowlist": {"domains": ["example.com"]}})
+    eng = client.create_engagement(grant, {"allowlist": {"domains": ["example.com"]}})
     scan = client.create_scan(grant, eng["id"], "https://example.com/x", "sast")
     client.wait_for_scan(grant, scan["id"])
     bundle = client.get_evidence(grant, scan["id"])

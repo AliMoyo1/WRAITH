@@ -118,6 +118,13 @@ class TestMatrix:
         caps = capabilities_for([Role.ADMIN, Role.OPERATOR], Tier.ENTERPRISE)
         assert "admin" in caps and "redteam_exploit" in caps
 
+    def test_engage_is_operator_only(self):
+        # Authoring engagements is Operator-only (separation from Analyst scanning and
+        # from Admin, which administers the tenant but does not author assessments).
+        assert "control_plane_engage" in capabilities_for([Role.OPERATOR], Tier.COMMUNITY)
+        assert "control_plane_engage" not in capabilities_for([Role.ANALYST], Tier.ENTERPRISE)
+        assert "control_plane_engage" not in capabilities_for([Role.ADMIN], Tier.ENTERPRISE)
+
 
 class TestRequireEntitlement:
     def test_allows_included_class(self):

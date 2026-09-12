@@ -72,11 +72,16 @@ def test_preview_out_of_scope(tmp_path, capsys):
     assert "OUT OF SCOPE" in out
 
 
-def test_preview_repo_path_is_local(tmp_path, capsys):
+def test_preview_repo_path_shows_engine_network(tmp_path, capsys):
     scope = tmp_path / "scope.json"
     _write_scope(scope, domains=("example.com",))
     rc = wraith.main(
         ["scan", "./somerepo", "--track", "sast", "--preview", "--scope", str(scope)]
     )
     out = capsys.readouterr().out
-    assert rc == 0 and "no network egress" in out
+    assert rc == 0
+    assert "its contents are not uploaded" in out
+    # The preview is egress-accurate: semgrep and trivy fetch rules and databases from
+    # their vendors even for a local path scan.
+    assert "network: semgrep" in out and "network: trivy" in out
+    assert "third-party network calls" in out

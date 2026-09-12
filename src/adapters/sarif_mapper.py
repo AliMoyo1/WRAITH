@@ -11,7 +11,24 @@ false, so every key here is a declared property).
 
 from __future__ import annotations
 
+import hashlib
+import re
+
 from .sarif import SarifResult
+
+# The finding-id contract enforced by store.result_store (kept in sync here): a safe
+# id has no path separators or colons, so it cannot escape the store directory. A
+# fingerprint-less SARIF result falls back to "rule:file:line", which violates this,
+# so an id that does not match is replaced by a stable hash of the fingerprint.
+_SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+def _finding_id(engine: str, fingerprint: str) -> str:
+    raw = f"{engine}-{fingerprint}"
+    if _SAFE_ID.match(raw):
+        return raw
+    digest = hashlib.sha256(fingerprint.encode("utf-8")).hexdigest()[:32]
+    return f"{engine}-{digest}"
 
 # Keyword buckets (matched against rule id + message + tags) -> WRAITH layer.
 _LAYER_KEYWORDS = [
@@ -50,7 +67,7 @@ def to_finding(result: SarifResult, engine: str, default_layer: int) -> dict:
     """Convert one SarifResult into a WRAITH-normalized finding dict."""
     fingerprint = result.fingerprint or f"{result.rule_id}:{result.file}:{result.start_line}"
     return {
-        "finding_id": f"{engine}-{fingerprint}",
+        "finding_id": _finding_id(engine, fingerprint),
         "fingerprint": fingerprint,
         "rule_id": result.rule_id,
         "engine": engine,
